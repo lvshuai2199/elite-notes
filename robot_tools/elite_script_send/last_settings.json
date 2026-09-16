@@ -1,0 +1,11 @@
+{
+  "host": "192.168.249.134",
+  "port": 30001,
+  "timeout": 5.0,
+  "read_reply": false,
+  "script_dir": "D:\\GitFiles\\elite-notes\\robot_tools\\elite_script_send\\scripts",
+  "last_file": "sample_movej.script",
+  "script_text": "def a():\n movej([-0.005,-1.564,-1.587,-1.474,1.571,-0.005],a=1.4,v=0.5,t=0,r=0)\nend",
+  "dashboard": "task -r",
+  "geometry": "900x580+145+201"
+}
