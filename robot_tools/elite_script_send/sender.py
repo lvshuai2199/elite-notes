@@ -143,6 +143,37 @@ def close_popup(host=None, timeout=None):
     return {"ok": ok, "reply": data, "message": "已清除弹窗" if ok else data}
 
 
+def stop_task(host=None, timeout=None):
+    """手册：stop，停止当前任务/工程。"""
+    data = dashboard_cmd("stop", host=host, timeout=timeout)
+    low = data.lower()
+    fail = ("fail" in low) or ("error" in low) or ("only supported" in low)
+    return {
+        "ok": not fail,
+        "reply": data,
+        "message": "工程已停止" if not fail else ("停止失败：" + data),
+    }
+
+
+def emergency_stop(host=None, timeout=None):
+    """急停：30001 下发 halt 立刻停运动，并 29999 stop 停任务。"""
+    halt_ok = True
+    halt_msg = "halt 已发"
+    try:
+        send_text("halt\n", host=host, timeout=timeout, read_reply=False)
+    except SendError as exc:
+        halt_ok = False
+        halt_msg = "halt 失败: %s" % exc.message
+    stop = stop_task(host=host, timeout=timeout)
+    ok = halt_ok and stop["ok"]
+    return {
+        "ok": ok,
+        "reply": stop.get("reply") or "",
+        "message": "急停  %s；%s" % (halt_msg, stop["message"]),
+        "stop": stop,
+    }
+
+
 def boot_and_send(script_text, host=None, timeout=None, stop_event=None, read_reply=False):
     power = powering_on(host=host, timeout=timeout)
     if not power["ok"]:

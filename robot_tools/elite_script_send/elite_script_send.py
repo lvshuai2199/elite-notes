@@ -8,6 +8,7 @@ import json
 import socket
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -21,11 +22,13 @@ from sender import (
     brake_releasing,
     close_popup,
     dashboard_cmd,
+    emergency_stop,
     list_script_files,
     play,
     powering_off,
     powering_on,
     send_text,
+    stop_task,
     task,
 )
 
@@ -63,6 +66,17 @@ end
 elite_script_send_probe()
 """
 
+TITLE_CMDS = {
+    "上电": "robotControl -on",
+    "下电": "robotControl -off",
+    "松闸": "brakeRelease",
+    "运行": "play",
+    "停止工程": "stop",
+    "查询任务": "task -r",
+    "清除弹窗": "popup -c",
+    "测试连接": "echo",
+}
+
 
 def _read_file(path):
     p = Path(path)
@@ -91,6 +105,10 @@ def run_cli(args):
             print(powering_off(host=args.host, timeout=args.timeout)["message"])
         if args.close_popup:
             print(close_popup(host=args.host, timeout=args.timeout)["message"])
+        if args.stop_task:
+            print(stop_task(host=args.host, timeout=args.timeout)["message"])
+        if args.estop:
+            print(emergency_stop(host=args.host, timeout=args.timeout)["message"])
         if args.brake:
             print(brake_releasing(host=args.host, timeout=args.timeout)["message"])
         if args.boot_send:
@@ -102,7 +120,7 @@ def run_cli(args):
                 print(result["reply"])
             return 0
         if args.file or args.stdin or not (
-            args.power_on or args.power_off or args.close_popup or args.brake or args.play or args.task
+            args.power_on or args.power_off or args.close_popup or args.stop_task or args.estop or args.brake or args.play or args.task
         ):
             result = send_text(
                 _cli_text(args),
@@ -131,81 +149,235 @@ class EliteScriptTester(object):
     def __init__(self, root):
         self.root = root
         self.root.title("Elite 脚本下发测试")
-        self.root.minsize(760, 500)
+        self.root.minsize(720, 420)
         self.cfg = load_settings()
-        self.root.geometry(self.cfg.get("geometry") or "900x580")
+        self.root.geometry(self._fit_geometry(self.cfg.get("geometry")))
         saved_dir = self.cfg.get("script_dir")
         self.script_dir = Path(saved_dir) if saved_dir else DEFAULT_SCRIPT_DIR
         self.busy = False
         self.stop_event = threading.Event()
         self._save_job = None
         self._loading = True
-
-        style = ttk.Style(self.root)
-        style.configure(".", font=("Microsoft YaHei", 9))
-
-        bar = ttk.Frame(root, padding=6)
-        bar.pack(fill="x")
-        ttk.Label(bar, text="IP").pack(side="left")
         self.var_host = tk.StringVar(value=str(self.cfg.get("host") or DEFAULT_HOST))
-        ttk.Entry(bar, textvariable=self.var_host, width=16).pack(side="left", padx=4)
-        ttk.Label(bar, text="30001").pack(side="left")
         self.var_port = tk.StringVar(value=str(self.cfg.get("port") or DEFAULT_PORT))
-        ttk.Entry(bar, textvariable=self.var_port, width=6).pack(side="left", padx=4)
-        ttk.Label(bar, text="超时s").pack(side="left")
         self.var_timeout = tk.StringVar(value=str(self.cfg.get("timeout") or DEFAULT_TIMEOUT))
-        ttk.Entry(bar, textvariable=self.var_timeout, width=5).pack(side="left", padx=4)
         self.var_reply = tk.BooleanVar(value=bool(self.cfg.get("read_reply", False)))
-        ttk.Checkbutton(bar, text="读回执", variable=self.var_reply).pack(side="left", padx=8)
-        ttk.Button(bar, text="测试连接", command=self._ping).pack(side="left", padx=4)
-        ttk.Button(bar, text="下发 30001", command=self._send).pack(side="left")
-        ttk.Button(bar, text="上电+松闸+下发", command=self._boot_send).pack(side="left", padx=4)
-        ttk.Button(bar, text="停止", command=self._stop).pack(side="left")
-
-        mid = ttk.Frame(root, padding=(6, 0, 6, 0))
-        mid.pack(fill="both", expand=True)
-
-        left = ttk.LabelFrame(mid, text=" 脚本目录 ", padding=4)
-        left.pack(side="left", fill="y")
-        self.lst = tk.Listbox(left, width=28, font=("Consolas", 9), exportselection=False)
-        self.lst.pack(fill="both", expand=True)
-        self.lst.bind("<<ListboxSelect>>", self._on_select)
-        btns = ttk.Frame(left)
-        btns.pack(fill="x", pady=4)
-        ttk.Button(btns, text="刷新", command=self._refresh).pack(side="left")
-        ttk.Button(btns, text="选目录", command=self._pick_dir).pack(side="left", padx=4)
-
-        right = ttk.Frame(mid)
-        right.pack(side="left", fill="both", expand=True, padx=(8, 0))
-        self.txt = scrolledtext.ScrolledText(right, font=("Consolas", 10), undo=True)
-        self.txt.pack(fill="both", expand=True)
-        self.txt.insert("1.0", self.cfg.get("script_text") or SAMPLE)
-
-        dash = ttk.Frame(root, padding=(6, 4, 6, 0))
-        dash.pack(fill="x")
-        ttk.Label(dash, text="29999").pack(side="left")
-        ttk.Button(dash, text="上电", command=self._power_on).pack(side="left", padx=2)
-        ttk.Button(dash, text="下电", command=self._power_off).pack(side="left", padx=2)
-        ttk.Button(dash, text="松闸", command=self._brake).pack(side="left", padx=2)
-        ttk.Button(dash, text="运行 play", command=self._play).pack(side="left", padx=2)
-        ttk.Button(dash, text="查询任务", command=self._task).pack(side="left", padx=2)
-        ttk.Button(dash, text="清除弹窗", command=self._close_popup).pack(side="left", padx=2)
         self.var_dash = tk.StringVar(value=str(self.cfg.get("dashboard") or "task -r"))
-        ttk.Entry(dash, textvariable=self.var_dash, width=22).pack(side="left", padx=6)
-        ttk.Button(dash, text="发 Dashboard", command=self._dashboard).pack(side="left")
+        self.var_dir = tk.StringVar(value=str(self.script_dir))
+        self.var_status = tk.StringVar(value="未连接")
+        self.history = list(self.cfg.get("command_history") or [])
+        self.hist_list = None
+        self.hist_detail = None
 
-        self.log = scrolledtext.ScrolledText(
-            root, height=8, font=("Consolas", 9), state="disabled"
-        )
-        self.log.pack(fill="x", padx=6, pady=6)
-        self._refresh()
+        self._build_ui()
+        self._refresh(log=False)
         self._restore_last_file()
-        self._append("上电 / 下电 / 松闸 / play / 查任务走 29999；下发走 30001，收到即执行。")
+        self._refresh_history_list()
+        self._append("30001 下发脚本会立即执行；停止工程=stop，急停=halt+stop。")
         for var in (self.var_host, self.var_port, self.var_timeout, self.var_reply, self.var_dash):
             var.trace("w", lambda *_: self._schedule_save())
         self.txt.bind("<KeyRelease>", lambda *_: self._schedule_save())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._loading = False
+
+    def _fit_geometry(self, saved):
+        default = "780x460"
+        if not saved:
+            return default
+        try:
+            part = str(saved).split("+")[0]
+            w, h = part.lower().split("x")
+            if int(w) > 860 or int(h) > 540:
+                return default
+            return saved
+        except (TypeError, ValueError):
+            return default
+
+    def _build_ui(self):
+        style = ttk.Style(self.root)
+        style.configure(".", font=("Microsoft YaHei", 9))
+        style.configure("Tool.TButton", padding=(4, 1))
+        style.configure("TNotebook.Tab", padding=(8, 2), font=("Microsoft YaHei", 9))
+
+        bar = ttk.Frame(self.root, padding=(6, 4, 6, 2))
+        bar.pack(fill="x")
+        ttk.Label(bar, text="IP").pack(side="left")
+        ttk.Entry(bar, textvariable=self.var_host, width=14).pack(side="left", padx=(3, 6))
+        ttk.Label(bar, text="30001").pack(side="left")
+        ttk.Entry(bar, textvariable=self.var_port, width=5).pack(side="left", padx=(3, 6))
+        ttk.Label(bar, text="超时").pack(side="left")
+        ttk.Entry(bar, textvariable=self.var_timeout, width=4).pack(side="left", padx=(3, 6))
+        ttk.Checkbutton(bar, text="回执", variable=self.var_reply).pack(side="left")
+        ttk.Button(bar, text="测连", command=self._ping, style="Tool.TButton", width=5).pack(side="left", padx=(4, 6))
+        self.lbl_status = tk.Label(
+            bar, textvariable=self.var_status, font=("Microsoft YaHei", 9),
+            fg="#333333", anchor="e",
+        )
+        self.lbl_status.pack(side="right", padx=(8, 0))
+
+        dash = ttk.LabelFrame(self.root, text=" Dashboard  29999 ", padding=(6, 3, 6, 4))
+        dash.pack(fill="x", padx=6, pady=(0, 4))
+        row1 = ttk.Frame(dash)
+        row1.pack(fill="x")
+        for text, cmd, w in (
+            ("上电", self._power_on, 5),
+            ("下电", self._power_off, 5),
+            ("松闸", self._brake, 5),
+            ("运行", self._play, 5),
+            ("停止", self._stop_task, 5),
+            ("查询", self._task, 5),
+            ("清弹窗", self._close_popup, 6),
+            ("取消", self._cancel_wait, 5),
+        ):
+            ttk.Button(row1, text=text, command=cmd, style="Tool.TButton", width=w).pack(side="left", padx=1)
+        tk.Button(
+            row1, text="急停", command=self._estop, width=5,
+            bg="#c62828", fg="#ffffff", activebackground="#8e0000",
+            activeforeground="#ffffff", relief="flat", cursor="hand2",
+            font=("Microsoft YaHei", 9, "bold"), padx=8, pady=1,
+        ).pack(side="right")
+
+        body = ttk.Panedwindow(self.root, orient="horizontal")
+        body.pack(fill="both", expand=True, padx=6, pady=(0, 4))
+
+        left = ttk.Frame(body, padding=0)
+        files_bar = ttk.Frame(left)
+        files_bar.pack(fill="x")
+        ttk.Label(files_bar, text="脚本", font=("Microsoft YaHei", 9)).pack(side="left")
+        ttk.Button(files_bar, text="目录", command=self._pick_dir, style="Tool.TButton", width=4).pack(side="right")
+        ttk.Button(files_bar, text="刷新", command=self._refresh, style="Tool.TButton", width=4).pack(side="right", padx=(0, 2))
+        ttk.Label(left, textvariable=self.var_dir, font=("Microsoft YaHei", 7), foreground="#777777").pack(fill="x")
+        self.lst = tk.Listbox(
+            left, width=18, height=10, font=("Consolas", 8), exportselection=False,
+            relief="flat", highlightthickness=1, highlightbackground="#cfd8dc",
+        )
+        self.lst.pack(fill="both", expand=True, pady=(2, 0))
+        self.lst.bind("<<ListboxSelect>>", self._on_select)
+        body.add(left, weight=0)
+
+        editor = ttk.Frame(body)
+        self.txt = scrolledtext.ScrolledText(
+            editor, font=("Consolas", 9), undo=True, relief="flat", height=12,
+            highlightthickness=1, highlightbackground="#cfd8dc",
+        )
+        self.txt.pack(fill="both", expand=True)
+        self.txt.insert("1.0", self.cfg.get("script_text") or SAMPLE)
+        sendbar = ttk.Frame(editor)
+        sendbar.pack(fill="x", pady=(4, 0))
+        ttk.Button(sendbar, text="下发脚本", command=self._send, style="Tool.TButton", width=8).pack(side="left")
+        ttk.Button(sendbar, text="上电+松闸+下发", command=self._boot_send, style="Tool.TButton").pack(side="left", padx=6)
+        body.add(editor, weight=1)
+
+        tabs = ttk.Notebook(self.root)
+        tabs.pack(fill="x", padx=6, pady=(0, 6))
+
+        log_tab = ttk.Frame(tabs, padding=2)
+        self.log = scrolledtext.ScrolledText(
+            log_tab, height=6, font=("Microsoft YaHei", 10), state="disabled",
+            relief="flat", bg="#ffffff", fg="#111111", insertbackground="#111111",
+            highlightthickness=1, highlightbackground="#cfd8dc",
+        )
+        self.log.tag_configure("info", foreground="#111111")
+        self.log.tag_configure("ok", foreground="#1b5e20")
+        self.log.tag_configure("err", foreground="#b71c1c")
+        self.log.tag_configure("busy", foreground="#e65100")
+        self.log.pack(fill="both", expand=True)
+        tabs.add(log_tab, text="日志")
+
+        hist_tab = ttk.Frame(tabs, padding=2)
+        self.hist_list = tk.Listbox(
+            hist_tab, font=("Microsoft YaHei", 10), exportselection=False, height=6,
+            relief="flat", highlightthickness=1, highlightbackground="#cfd8dc",
+            fg="#111111", bg="#ffffff",
+        )
+        self.hist_list.pack(fill="both", expand=True)
+        self.hist_list.bind("<Double-Button-1>", self._on_history_dbl)
+        hbar = ttk.Frame(hist_tab)
+        hbar.pack(fill="x", pady=(2, 0))
+        ttk.Label(hbar, text="29999").pack(side="left")
+        dash_entry = ttk.Entry(hbar, textvariable=self.var_dash)
+        dash_entry.pack(side="left", padx=4, fill="x", expand=True)
+        dash_entry.bind("<Return>", lambda *_: self._dashboard())
+        ttk.Button(hbar, text="发送", command=self._dashboard, style="Tool.TButton", width=5).pack(side="left")
+        ttk.Button(hbar, text="填入", command=self._history_fill, style="Tool.TButton", width=5).pack(side="left", padx=(6, 0))
+        ttk.Button(hbar, text="重发", command=self._history_resend, style="Tool.TButton", width=5).pack(side="left", padx=4)
+        ttk.Button(hbar, text="清空", command=self._history_clear, style="Tool.TButton", width=5).pack(side="right")
+        tabs.add(hist_tab, text="历史")
+        self.hist_detail = None
+
+    def _set_status(self, text, kind="info"):
+        colors = {"ok": "#2e7d32", "err": "#c62828", "info": "#555555", "busy": "#ef6c00"}
+        self.var_status.set(text)
+        self.lbl_status.configure(fg=colors.get(kind, "#555555"))
+
+    def _history_item(self, index=None):
+        if self.hist_list is None:
+            return None
+        sel = self.hist_list.curselection() if index is None else (index,)
+        if not sel:
+            return None
+        pos = int(sel[0])
+        real = len(self.history) - 1 - pos
+        if real < 0 or real >= len(self.history):
+            return None
+        return self.history[real]
+
+    def _refresh_history_list(self):
+        if self.hist_list is None:
+            return
+        self.hist_list.delete(0, "end")
+        for item in reversed(self.history):
+            mark = "OK" if item.get("ok", True) else "NG"
+            self.hist_list.insert("end", "%s  [%s]  %s" % (item.get("ts", ""), mark, item.get("title", "")))
+        if self.history:
+            self.hist_list.selection_set(0)
+            self.hist_list.see(0)
+
+    def _on_history_dbl(self, _evt=None):
+        self._history_fill()
+
+    def _history_fill(self):
+        item = self._history_item()
+        if item is None:
+            return
+        cmd = (item.get("cmd") or "").strip()
+        if cmd in ("halt + stop", "boot_and_send") or cmd.startswith("send "):
+            return
+        self.var_dash.set(cmd)
+        self._schedule_save()
+
+    def _history_resend(self):
+        item = self._history_item()
+        if item is None:
+            return
+        title = item.get("title") or ""
+        cmd = (item.get("cmd") or "").strip()
+        if title == "下发" or cmd.startswith("send "):
+            self._send()
+        elif title == "急停":
+            self._estop()
+        elif title == "上电+松闸+下发":
+            self._boot_send()
+        elif cmd:
+            self.var_dash.set(cmd)
+            self._dashboard()
+
+    def _history_clear(self):
+        self.history = []
+        self._refresh_history_list()
+        self._schedule_save()
+
+    def _record_history(self, title, cmd, result_text, ok=True):
+        self.history.append({
+            "ts": time.strftime("%H:%M:%S"),
+            "title": title,
+            "cmd": cmd or title,
+            "result": (result_text or "").strip()[:800],
+            "ok": bool(ok),
+        })
+        self.history = self.history[-80:]
+        self._refresh_history_list()
+        self._schedule_save()
 
     def _collect_settings(self):
         last_file = ""
@@ -232,6 +404,7 @@ class EliteScriptTester(object):
             "script_text": self.txt.get("1.0", "end").rstrip("\n"),
             "dashboard": self.var_dash.get().strip(),
             "geometry": self.root.geometry(),
+            "command_history": self.history[-80:],
         }
 
     def _schedule_save(self):
@@ -271,19 +444,26 @@ class EliteScriptTester(object):
             except OSError:
                 pass
 
-    def _append(self, line):
+    def _append(self, line, kind="info"):
+        tag = kind if kind in ("ok", "err", "busy", "info") else "info"
         self.log.configure(state="normal")
-        self.log.insert("end", line + "\n")
+        self.log.insert("end", line + "\n", tag)
         self.log.see("end")
         self.log.configure(state="disabled")
+        self._set_status(line.split("\n")[0][:80], kind)
 
-    def _refresh(self):
+    def _refresh(self, log=True):
         self.script_dir.mkdir(parents=True, exist_ok=True)
+        shown = str(self.script_dir)
+        if len(shown) > 32:
+            shown = "..." + shown[-29:]
+        self.var_dir.set(shown)
         self.lst.delete(0, "end")
         files = list_script_files(self.script_dir)
         for p in files:
             self.lst.insert("end", "%s  (%d B)" % (p.name, p.stat().st_size))
-        self._append("目录 %s  共 %d 个脚本" % (self.script_dir, len(files)))
+        if log:
+            self._append("目录 %s  共 %d 个脚本" % (self.script_dir, len(files)))
 
     def _pick_dir(self):
         chosen = filedialog.askdirectory(initialdir=str(self.script_dir))
@@ -313,54 +493,71 @@ class EliteScriptTester(object):
             float(self.var_timeout.get()),
         )
 
-    def _run_bg(self, title, fn):
-        if self.busy:
+    def _run_bg(self, title, fn, force=False):
+        if self.busy and not force:
             return
-        self.busy = True
-        self.stop_event.clear()
+        if not force:
+            self.busy = True
+            self.stop_event.clear()
+            self._set_status(title + "…", "busy")
+        else:
+            self._set_status(title + "…", "err" if title == "急停" else "busy")
 
         def work():
             try:
                 result = fn()
-                self.root.after(0, lambda: self._done(title, result, None))
+                self.root.after(0, lambda: self._done(title, result, None, force=force))
             except Exception:
                 err = traceback.format_exc()
-                self.root.after(0, lambda: self._done(title, None, err))
+                self.root.after(0, lambda: self._done(title, None, err, force=force))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _stop(self):
+    def _cancel_wait(self):
         self.stop_event.set()
-        self._append("已请求停止（松闸/下电循环会退出）")
+        self._append("已取消等待（松闸/下电循环会退出）")
 
-    def _done(self, title, result, err):
-        self.busy = False
+    def _done(self, title, result, err, force=False):
+        if not force:
+            self.busy = False
         if err:
-            self._append("%s 失败\n%s" % (title, err.strip()))
+            self._append("%s 失败\n%s" % (title, err.strip()), "err")
+            self._record_history(title, title, err.strip(), ok=False)
             messagebox.showerror(title, err.splitlines()[-1])
             return
         if isinstance(result, dict):
             msg = result.get("message")
             extra = result.get("reply") or ""
+            kind = "err" if result.get("ok") is False else "ok"
             if msg:
                 extra_bit = extra if extra and extra != msg else ""
-                self._append("%s  %s  %s" % (title, msg, extra_bit))
+                line = "%s  %s  %s" % (title, msg, extra_bit)
+                self._append(line, kind)
             else:
-                self._append(
-                    "%s 成功  %s bytes  %sms  %s:%s  %s"
-                    % (
-                        title,
-                        result.get("bytes_sent", "-"),
-                        result.get("duration_ms", "-"),
-                        result.get("host"),
-                        result.get("port"),
-                        extra,
-                    )
+                line = "%s 成功  %s bytes  %sms  %s:%s  %s" % (
+                    title,
+                    result.get("bytes_sent", "-"),
+                    result.get("duration_ms", "-"),
+                    result.get("host"),
+                    result.get("port"),
+                    extra,
                 )
+                self._append(line, kind)
+            cmd = TITLE_CMDS.get(title, title)
+            if title.startswith("Dashboard"):
+                cmd = title.replace("Dashboard ", "", 1)
+            elif title == "下发":
+                cmd = "send 30001 (%s bytes)" % result.get("bytes_sent", "")
+            elif title == "急停":
+                cmd = "halt + stop"
+            elif title == "上电+松闸+下发":
+                cmd = "boot_and_send"
+            self._record_history(title, cmd, line, ok=(result.get("ok") is not False))
             if result.get("ok") is False:
                 messagebox.showwarning(title, msg or extra or "失败")
         else:
-            self._append("%s  %s" % (title, result))
+            self._append("%s  %s" % (title, result), "ok")
+            self._record_history(title, title, str(result), ok=True)
 
     def _ping(self):
         def fn():
@@ -369,6 +566,7 @@ class EliteScriptTester(object):
                 pass
             return "已连通 %s:%s" % (host, port)
 
+        self._set_status("正在连接…", "busy")
         self._run_bg("测试连接", fn)
 
     def _send(self):
@@ -409,6 +607,22 @@ class EliteScriptTester(object):
             return play(host=host, timeout=timeout)
 
         self._run_bg("运行", fn)
+
+    def _stop_task(self):
+        def fn():
+            host, _port, timeout = self._params()
+            return stop_task(host=host, timeout=timeout)
+
+        self._run_bg("停止工程", fn, force=True)
+
+    def _estop(self):
+        self.stop_event.set()
+
+        def fn():
+            host, _port, timeout = self._params()
+            return emergency_stop(host=host, timeout=timeout)
+
+        self._run_bg("急停", fn, force=True)
 
     def _task(self):
         def fn():
@@ -464,6 +678,8 @@ def main(argv=None):
     parser.add_argument("--power-on", action="store_true")
     parser.add_argument("--power-off", action="store_true")
     parser.add_argument("--close-popup", action="store_true")
+    parser.add_argument("--stop-task", action="store_true")
+    parser.add_argument("--estop", action="store_true")
     parser.add_argument("--brake", action="store_true")
     parser.add_argument("--play", action="store_true")
     parser.add_argument("--task", action="store_true")
@@ -471,7 +687,7 @@ def main(argv=None):
     parser.add_argument("--cli", action="store_true")
     args = parser.parse_args(argv)
 
-    if args.cli or args.file or args.stdin or args.dashboard or args.power_on or args.power_off or args.close_popup or args.brake or args.play or args.task or args.boot_send:
+    if args.cli or args.file or args.stdin or args.dashboard or args.power_on or args.power_off or args.close_popup or args.stop_task or args.estop or args.brake or args.play or args.task or args.boot_send:
         return run_cli(args)
     if tk is None:
         print("无 tkinter，请加 --cli", file=sys.stderr)
