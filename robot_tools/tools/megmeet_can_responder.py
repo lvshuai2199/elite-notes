@@ -19,7 +19,7 @@ ROBOT_ID = 0x1FD07063
 WELDER_ID = 0x1FD08063
 CMD_POLL = 0xFF
 JOB_MODES = {
-    0: "保留0", 1: "保留1", 2: "JOB", 3: "保留3",
+    0: "直流一元", 1: "脉冲一元", 2: "JOB", 3: "保留3",
     4: "保留4", 5: "保留5", 6: "保留6", 7: "保留7",
 }
 FLOW_NODES = ["插件", "RPC", "CanBus", "can0", "焊机"]
@@ -260,6 +260,11 @@ class MegmeetCanResponder(object):
         tk.Label(extra, text="模式", font=("Microsoft YaHei", 7)).pack(side="left", padx=(8, 0))
         self.lbl_mode = tk.Label(extra, text="—", font=("Microsoft YaHei", 8, "bold"))
         self.lbl_mode.pack(side="left")
+        tk.Label(extra, text="给定", font=("Microsoft YaHei", 7)).pack(side="left", padx=(8, 0))
+        self.lbl_cmd_i = tk.Label(extra, text="—A", font=("Consolas", 10, "bold"), fg="#bf360c")
+        self.lbl_cmd_i.pack(side="left", padx=2)
+        self.lbl_cmd_u = tk.Label(extra, text="—V", font=("Consolas", 10, "bold"), fg="#bf360c")
+        self.lbl_cmd_u.pack(side="left")
 
         right = tk.LabelFrame(mid, text=" 焊机回帧  0x1FD08063 ",
                               font=("Microsoft YaHei", 8), padx=4, pady=2)
@@ -483,7 +488,9 @@ class MegmeetCanResponder(object):
         retract = bit(data[2], 3)
         mode = (data[2] >> 5) & 0x07
         job = data[3]
-        rx_key = tuple(data[:4])
+        cmd_current = (data[4] << 8) | data[5]
+        cmd_voltage = ((data[6] << 8) | data[7]) / 10.0
+        rx_key = tuple(data[:8])
 
         self.set_bytes(self.rx_byte_cells, data, "#ffe0b2")
         self._flash_flow("rx")
@@ -491,6 +498,8 @@ class MegmeetCanResponder(object):
         self.lbl_cmd.config(text="0x{:02X} {}".format(cmd, "轮询" if cmd == CMD_POLL else "映射"))
         self.lbl_job.config(text=str(job))
         self.lbl_mode.config(text=JOB_MODES.get(mode, str(mode)))
+        self.lbl_cmd_i.config(text="{}A".format(cmd_current))
+        self.lbl_cmd_u.config(text="{:.1f}V".format(cmd_voltage))
         self._set_chip("开始焊接", weld, style=CHIP_ON)
         self._set_chip("寻位", seek, style=CHIP_ON)
         self._set_chip("检气", gas, style=CHIP_ON)
@@ -508,7 +517,8 @@ class MegmeetCanResponder(object):
         else:
             self.poll_count += 1
             bits = [n for n, f in (("起焊", weld), ("检气", gas), ("送丝", feed), ("回抽", retract), ("寻位", seek)) if f]
-            action = "JOB={} {} {}".format(job, JOB_MODES.get(mode, mode), " ".join(bits) or "空闲")
+            action = "JOB={} {} {}A {:.1f}V {}".format(
+                job, JOB_MODES.get(mode, mode), cmd_current, cmd_voltage, " ".join(bits) or "空闲")
             if changed or not self.var_log_changes.get():
                 self.append_log("↓ " + action + "  [" + hex8(data) + "]", "chg" if changed else "rx")
 
