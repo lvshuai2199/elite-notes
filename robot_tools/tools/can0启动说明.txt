@@ -1,0 +1,122 @@
+虚拟机模拟 CAN 焊机说明（WeldingTools / FullFunctionWelding）
+
+============================================================
+一、环境
+============================================================
+在跑 EliRobot 的那台 Linux 虚拟机上操作（例如 elite@elite），
+不是 Windows 宿主机。插件和模拟器必须在同一台 Linux 里。
+
+一台电脑即可，不必第二台。USB2CAN 不是必须：
+  - 设备已枚举 can0：直接用
+  - 没有硬件：可建名为 can0 的 vcan（不能叫 vcan0，插件扫不到）
+
+
+============================================================
+二、虚拟机里安装依赖
+============================================================
+python-can（已装过会提示 already satisfied）：
+
+  pip3 install python-can
+
+界面依赖 tkinter，没有就装：
+
+  python3 -c "import tkinter, can; print('ok')"
+  sudo apt-get install -y python3-tk
+
+把本目录两个文件拷进虚拟机，例如 ~/：
+
+  megmeet_can_responder.py
+  can0启动说明.txt
+
+启动：
+
+  python3 ~/megmeet_can_responder.py
+
+
+============================================================
+三、USB2CAN 怎么变成 can0
+============================================================
+1. 虚拟机开着，把 USB2CAN Connect 到虚拟机（不要让 Windows 独占）
+2. 虚拟机里检查：
+     lsusb
+     ls /sys/class/net/
+     ip -d link
+
+3. 驱动分两类
+   A. gs_usb / usb_8dev / peak_usb：插上就是 can0，和插件最匹配
+        sudo ip link set can0 up type can bitrate 125000
+   B. SLCAN（常变成 slcan0）：插件名字扫不到
+        sudo slcand -o -c -s4 /dev/ttyUSB0 can0    # s4=125k, s5=250k, s6=500k
+        sudo ip link set can0 up
+      若已是 slcan0：
+        sudo ip link set slcan0 down
+        sudo ip link set slcan0 name can0
+        sudo ip link set can0 up
+
+没有硬件、只想本机对跑时：
+
+  sudo ip link add dev can0 type vcan
+  sudo ip link set can0 up
+
+插件只认 /sys/class/net/ 下以 can 开头的目录。
+can0 可以，slcan0 / vcan0 都不行。
+
+
+============================================================
+四、插件怎么拉起 can0（不会开机自动 up）
+============================================================
+打开模拟器窗口不会自动把 can0 拉起来。
+
+插件点「连接」时才会执行：
+  ip link set <口> up type can bitrate 125000|250000|500000
+然后 SocketCAN RAW 绑定，约 50ms 一轮询（界面约 20 Hz）。
+
+  下发扩展帧  0x1FD07063
+  回帧扩展帧  0x1FD08063
+  机器人脚本经 XML-RPC :34446 调 CanBusService
+
+WeldingTools 和 FullFunctionWelding 协议相同。
+两个插件不要同时连（都占 can0 和 34446）。
+
+建议顺序：
+  1. USB2CAN / vcan 已出现 can0
+  2. 插件先连 MEGMEET CAN（负责 ip link up）
+  3. 模拟器点「打开总线」（口已 UP 则只绑定 socket）
+  4. 「关闭」只松开模拟器，不会 down 掉 can0
+
+
+============================================================
+五、模拟器按钮
+============================================================
+  打开总线  绑定 can0；口已 UP 不再跑 ip link
+  关闭      只松开本程序
+  刷新      再扫 /sys/class/net/can*
+  说明      弹出本说明摘要
+
+没有 can0：先插板或先让插件连接，再刷新。
+ip link 没权限可忽略，只要插件已经把口拉起就能绑。
+不要用 sudo 乱 down can0，会把插件一起掐断。
+
+
+============================================================
+六、看数据是否通
+============================================================
+  左橙：插件下发（起焊/寻位/检气色块，JOB 号）
+  右绿：焊机回帧（就绪/起弧/电流电压）
+  映射 6 条 F0–F5 后进入轮询，约 20 Hz 即表示已通
+
+空闲轮询常见：FF 01 40 00 …（机器人故障位默认开，模式 JOB=2，JOB号=0）
+
+「起焊沿起弧」只在「开始焊接」边沿改勾选。
+手控起弧成功时先去掉该勾。
+  起焊一直关、勾选自己掉 = 模拟器旧逻辑/自动起弧
+  起焊开→关、勾选跟着掉 = 插件发了灭弧
+
+
+============================================================
+七、自检命令
+============================================================
+  ls /sys/class/net/can0
+  ip -d link show can0
+  candump can0          # 需 can-utils
+  cansend can0 1FD07063#FF00000000000000
