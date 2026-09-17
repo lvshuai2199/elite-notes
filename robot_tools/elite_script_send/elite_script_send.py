@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 from pathlib import Path
 
 from sender import (
@@ -31,6 +32,8 @@ from sender import (
     stop_task,
     task,
 )
+from state_listener import RobotStateStream, format_pose
+from trajectory import pose_sample, write_csv, write_html
 
 try:
     import tkinter as tk
@@ -168,20 +171,37 @@ class EliteScriptTester(object):
         self.history = list(self.cfg.get("command_history") or [])
         self.hist_list = None
         self.hist_detail = None
+        self._listen_stop = threading.Event()
+        self._listen_thread = None
+        self._latest_pose = None
+        self._listen_ok_logged = False
+        self.var_listen = tk.StringVar(value="未监听")
+        self._listening = False
+        self.var_j = [tk.StringVar(value="—") for _ in range(6)]
+        self.var_xyz = [tk.StringVar(value="—") for _ in range(3)]
+        self.var_rpy = [tk.StringVar(value="—") for _ in range(3)]
+        self._recording = False
+        self._rec_lock = threading.Lock()
+        self._rec_samples = []
+        self._rec_t0 = None
+        self.var_rec = tk.StringVar(value="")
+        self.var_open_html = tk.BooleanVar(value=bool(self.cfg.get("open_html", False)))
 
         self._build_ui()
         self._refresh(log=False)
         self._restore_last_file()
         self._refresh_history_list()
         self._append("30001 下发脚本会立即执行；停止工程=stop，急停=halt+stop。")
-        for var in (self.var_host, self.var_port, self.var_timeout, self.var_reply, self.var_dash):
+        for var in (self.var_host, self.var_port, self.var_timeout, self.var_reply, self.var_dash, self.var_open_html):
             var.trace("w", lambda *_: self._schedule_save())
         self.txt.bind("<KeyRelease>", lambda *_: self._schedule_save())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._loading = False
+        self._start_listen()
+        self._poll_pose()
 
     def _fit_geometry(self, saved):
-        default = "780x460"
+        default = "780x500"
         if not saved:
             return default
         try:
@@ -236,6 +256,67 @@ class EliteScriptTester(object):
             activeforeground="#ffffff", relief="flat", cursor="hand2",
             font=("Microsoft YaHei", 9, "bold"), padx=8, pady=1,
         ).pack(side="right")
+
+        pose = ttk.LabelFrame(self.root, text=" 实时位姿  30001 ", padding=(6, 3, 6, 4))
+        pose.pack(fill="x", padx=6, pady=(0, 4))
+        pose_bar = ttk.Frame(pose)
+        pose_bar.pack(fill="x")
+        self._listen_slot = ttk.Frame(pose_bar)
+        self._listen_slot.pack(side="left")
+        self.btn_listen_start = tk.Button(
+            self._listen_slot, text="监听", command=self._start_listen, width=10,
+            bg="#2e7d32", fg="#ffffff", activebackground="#1b5e20", activeforeground="#ffffff",
+            relief="flat", cursor="hand2", font=("Microsoft YaHei", 9), padx=6, pady=1,
+        )
+        self.btn_listen_stop = tk.Button(
+            self._listen_slot, text="停止监听", command=self._stop_listen, width=10,
+            bg="#c62828", fg="#ffffff", activebackground="#8e0000", activeforeground="#ffffff",
+            relief="flat", cursor="hand2", font=("Microsoft YaHei", 9), padx=6, pady=1,
+        )
+        self._record_slot = ttk.Frame(pose_bar)
+        self._record_slot.pack(side="left", padx=(4, 8))
+        self.btn_record_start = tk.Button(
+            self._record_slot, text="记录", command=self._start_record, width=10,
+            bg="#1565c0", fg="#ffffff", activebackground="#0d47a1", activeforeground="#ffffff",
+            relief="flat", cursor="hand2", font=("Microsoft YaHei", 9), padx=6, pady=1,
+        )
+        self.btn_record_stop = tk.Button(
+            self._record_slot, text="停止记录", command=self._stop_record, width=10,
+            bg="#ef6c00", fg="#ffffff", activebackground="#e65100", activeforeground="#ffffff",
+            relief="flat", cursor="hand2", font=("Microsoft YaHei", 9), padx=6, pady=1,
+        )
+        self._sync_pose_buttons()
+        ttk.Checkbutton(pose_bar, text="打开HTML", variable=self.var_open_html).pack(side="left")
+        self.lbl_listen = tk.Label(
+            pose_bar, textvariable=self.var_listen, font=("Microsoft YaHei", 9), fg="#555555",
+        )
+        self.lbl_listen.pack(side="left", padx=(8, 0))
+        self.lbl_rec = tk.Label(
+            pose_bar, textvariable=self.var_rec, font=("Microsoft YaHei", 9), fg="#ef6c00",
+        )
+        self.lbl_rec.pack(side="right")
+        num_font = ("Consolas", 10)
+        cart_row = ttk.Frame(pose)
+        cart_row.pack(fill="x", pady=(4, 2))
+        ttk.Label(cart_row, text="笛卡尔").pack(side="left")
+        for name, var, unit in (
+            ("X", self.var_xyz[0], "mm"),
+            ("Y", self.var_xyz[1], "mm"),
+            ("Z", self.var_xyz[2], "mm"),
+            ("Rx", self.var_rpy[0], "°"),
+            ("Ry", self.var_rpy[1], "°"),
+            ("Rz", self.var_rpy[2], "°"),
+        ):
+            ttk.Label(cart_row, text=name).pack(side="left", padx=(8, 2))
+            tk.Label(cart_row, textvariable=var, font=num_font, fg="#111111", width=9, anchor="e").pack(side="left")
+            ttk.Label(cart_row, text=unit, foreground="#777777").pack(side="left")
+        joint_row = ttk.Frame(pose)
+        joint_row.pack(fill="x")
+        ttk.Label(joint_row, text="关节  ").pack(side="left")
+        for i, var in enumerate(self.var_j):
+            ttk.Label(joint_row, text="J%d" % (i + 1)).pack(side="left", padx=(8, 2))
+            tk.Label(joint_row, textvariable=var, font=num_font, fg="#111111", width=8, anchor="e").pack(side="left")
+            ttk.Label(joint_row, text="°", foreground="#777777").pack(side="left")
 
         body = ttk.Panedwindow(self.root, orient="horizontal")
         body.pack(fill="both", expand=True, padx=6, pady=(0, 4))
@@ -405,6 +486,7 @@ class EliteScriptTester(object):
             "dashboard": self.var_dash.get().strip(),
             "geometry": self.root.geometry(),
             "command_history": self.history[-80:],
+            "open_html": bool(self.var_open_html.get()),
         }
 
     def _schedule_save(self):
@@ -424,7 +506,159 @@ class EliteScriptTester(object):
         if self._save_job is not None:
             self.root.after_cancel(self._save_job)
         save_settings(self._collect_settings())
+        if self._recording:
+            self._stop_record(open_html=False)
+        self._listen_stop.set()
         self.root.destroy()
+
+    def _sync_pose_buttons(self):
+        self.btn_listen_start.pack_forget()
+        self.btn_listen_stop.pack_forget()
+        self.btn_record_start.pack_forget()
+        self.btn_record_stop.pack_forget()
+        if self._listening:
+            self.btn_listen_stop.pack()
+        else:
+            self.btn_listen_start.pack()
+        if self._recording:
+            self.btn_record_stop.pack()
+        else:
+            self.btn_record_start.pack()
+
+    def _start_listen(self):
+        self._listen_stop.set()
+        self._listen_stop = threading.Event()
+        self._listen_ok_logged = False
+        self._listening = True
+        self.var_listen.set("正在连接…")
+        self.lbl_listen.configure(fg="#ef6c00")
+        self._sync_pose_buttons()
+        self._listen_thread = threading.Thread(target=self._listen_worker, daemon=True)
+        self._listen_thread.start()
+
+    def _stop_listen(self):
+        self._listen_stop.set()
+        self._listening = False
+        self.var_listen.set("已停止")
+        self.lbl_listen.configure(fg="#555555")
+        self._sync_pose_buttons()
+
+    def _on_listen_status(self, text, kind):
+        self.var_listen.set(text[:72])
+        colors = {"ok": "#2e7d32", "err": "#c62828", "info": "#555555", "busy": "#ef6c00"}
+        self.lbl_listen.configure(fg=colors.get(kind, "#555555"))
+
+    def _listen_worker(self):
+        stop = self._listen_stop
+        stream = RobotStateStream()
+        while not stop.is_set():
+            sock = None
+            try:
+                host, port, _timeout = self._params()
+                sock = socket.create_connection((host, port), timeout=3)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.settimeout(1.0)
+                stream.reset()
+                self.root.after(0, lambda h=host, p=port: self._on_listen_status("监听中  %s:%s" % (h, p), "ok"))
+                while not stop.is_set():
+                    try:
+                        chunk = sock.recv(8192)
+                    except socket.timeout:
+                        continue
+                    if not chunk:
+                        raise socket.error("连接已关闭")
+                    poses = stream.feed(chunk)
+                    if poses:
+                        self._latest_pose = poses[-1]
+                        if self._recording:
+                            now = time.time()
+                            with self._rec_lock:
+                                t0 = self._rec_t0
+                                if t0 is not None and len(self._rec_samples) < 500000:
+                                    for parsed in poses:
+                                        self._rec_samples.append(pose_sample(parsed, t0, now))
+            except Exception as exc:
+                if stop.is_set():
+                    break
+                self.root.after(0, lambda m=str(exc): self._on_listen_status("断开，重连中  %s" % m, "err"))
+                stop.wait(1.5)
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
+    def _poll_pose(self):
+        parsed = self._latest_pose
+        if parsed:
+            shown = format_pose(parsed)
+            joints = shown.get("joints_deg")
+            xyz = shown.get("xyz_mm")
+            rpy = shown.get("rpy_deg")
+            if joints:
+                for i, val in enumerate(joints):
+                    self.var_j[i].set("%.3f" % val)
+            if xyz:
+                for i, val in enumerate(xyz):
+                    self.var_xyz[i].set("%.2f" % val)
+            if rpy:
+                for i, val in enumerate(rpy):
+                    self.var_rpy[i].set("%.3f" % val)
+        if self._recording:
+            with self._rec_lock:
+                n = len(self._rec_samples)
+            self.var_rec.set("记录中  %d 点" % n)
+        try:
+            self.root.after(100, self._poll_pose)
+        except tk.TclError:
+            pass
+
+    def _start_record(self):
+        if self._recording:
+            return
+        if self._listen_stop.is_set():
+            self._start_listen()
+        with self._rec_lock:
+            self._rec_samples = []
+            self._rec_t0 = time.time()
+        self._recording = True
+        self.var_rec.set("记录中  0 点")
+        self.lbl_rec.configure(fg="#ef6c00")
+        self._sync_pose_buttons()
+        self._append("开始记录 TCP / 关节")
+
+    def _stop_record(self, open_html=None):
+        if not self._recording and not self._rec_samples:
+            return
+        self._recording = False
+        self._sync_pose_buttons()
+        with self._rec_lock:
+            samples = list(self._rec_samples)
+            self._rec_t0 = None
+        if not samples:
+            self.var_rec.set("未采到点")
+            self._append("记录停止：没有数据", "err")
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        folder = Path(__file__).resolve().parent / "traces"
+        try:
+            csv_path = write_csv(folder / ("traj_%s.csv" % stamp), samples)
+            html_path = write_html(folder / ("traj_%s.html" % stamp), samples)
+        except OSError as exc:
+            self._append("保存轨迹失败: %s" % exc, "err")
+            return
+        self.var_rec.set("已保存 %d 点" % len(samples))
+        self.lbl_rec.configure(fg="#2e7d32")
+        self._append("轨迹 CSV   %s" % csv_path, "ok")
+        self._append("轨迹 HTML  %s" % html_path, "ok")
+        if open_html is None:
+            open_html = bool(self.var_open_html.get())
+        if open_html:
+            try:
+                webbrowser.open(html_path.resolve().as_uri())
+            except Exception:
+                pass
 
     def _restore_last_file(self):
         name = self.cfg.get("last_file") or ""
