@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>自制 URDF 关节控制</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --line: #2b3845;
+      --text: #e8eef4;
+      --muted: #8ea0b2;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", "PingFang SC", sans-serif; }
+    #app { display: grid; grid-template-columns: 320px 1fr; height: 100%; }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      padding: 16px;
+      overflow: auto;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px; font-weight: 650; }
+    .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+    #viewport { position: relative; min-width: 0; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .row { margin: 12px 0; }
+    label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    label span.name { font-weight: 600; }
+    label span.val { font-variant-numeric: tabular-nums; color: var(--accent); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    button {
+      background: #243140;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    #status { color: var(--muted); font-size: 12px; min-height: 2.6em; }
+    #status.ok { color: var(--ok); }
+    #status.err { color: #ff7b7b; }
+    #hint {
+      position: absolute; left: 12px; bottom: 12px;
+      color: var(--muted); font-size: 12px; pointer-events: none;
+    }
+    @media (max-width: 800px) {
+      #app { grid-template-columns: 1fr; grid-template-rows: 42vh 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside>
+      <h1>自制 URDF 关节控制</h1>
+      <div class="sub">robot.urdf · 拖动滑条改姿态</div>
+      <div id="status">正在加载模型…</div>
+      <div id="joints"></div>
+      <div class="btns">
+        <button type="button" id="reset">回零</button>
+        <button type="button" id="copy">复制关节角</button>
+      </div>
+    </aside>
+    <div id="viewport">
+      <div id="hint">左键旋转 · 滚轮缩放 · 右键平移</div>
+    </div>
+  </div>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { STLLoader } from "three/addons/loaders/STLLoader.js";
+
+    const URDF_URL = "./robot.urdf";
+    const RAD2DEG = 180 / Math.PI;
+    const DEG2RAD = Math.PI / 180;
+    const LINK_COLORS = {
+      base_link: 0x6b7785,
+      link1: 0x3d9cf0,
+      link2: 0x4aa3a8,
+      link3: 0xc9a227,
+      link4: 0xd97746,
+      link5: 0x7c6cf0,
+      link6: 0x3ecf8e,
+    };
+
+    const statusEl = document.getElementById("status");
+    const jointsEl = document.getElementById("joints");
+    const viewport = document.getElementById("viewport");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f1419);
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 50);
+    camera.position.set(1.4, 1.1, 1.4);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    viewport.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 0.4, 0);
+
+    scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x1a1a1a, 1.1));
+    const key = new THREE.DirectionalLight(0xffffff, 1.3);
+    key.position.set(2, 3, 1.5);
+    scene.add(key);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const grid = new THREE.GridHelper(2, 20, 0x3a4a5a, 0x243140);
+    scene.add(grid);
+    scene.add(new THREE.AxesHelper(0.3));
+
+    const world = new THREE.Group();
+    scene.add(world);
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = kind || "";
+    }
+
+    function parseVec(str, n) {
+      const parts = (str || "").trim().split(/\s+/).map(Number);
+      while (parts.length < n) parts.push(0);
+      return parts;
+    }
+
+    function originMatrix(el) {
+      const xyz = parseVec(el?.getAttribute("xyz"), 3);
+      const rpy = parseVec(el?.getAttribute("rpy"), 3);
+      // URDF RPY is fixed-axis X then Y then Z: R = Rz(yaw) * Ry(pitch) * Rx(roll)
+      const rx = new THREE.Matrix4().makeRotationX(rpy[0]);
+      const ry = new THREE.Matrix4().makeRotationY(rpy[1]);
+      const rz = new THREE.Matrix4().makeRotationZ(rpy[2]);
+      const rot = new THREE.Matrix4().multiplyMatrices(rz, new THREE.Matrix4().multiplyMatrices(ry, rx));
+      const m = new THREE.Matrix4();
+      m.compose(
+        new THREE.Vector3(xyz[0], xyz[1], xyz[2]),
+        new THREE.Quaternion().setFromRotationMatrix(rot),
+        new THREE.Vector3(1, 1, 1)
+      );
+      return m;
+    }
+
+    function parseUrdf(xmlText) {
+      const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+      if (doc.querySelector("parsererror")) throw new Error("URDF XML 解析失败");
+      const links = {};
+      for (const link of doc.querySelectorAll("robot > link")) {
+        const name = link.getAttribute("name");
+        const visual = link.querySelector("visual");
+        const mesh = visual?.querySelector("geometry > mesh");
+        links[name] = {
+          name,
+          visualOrigin: originMatrix(visual?.querySelector("origin")),
+          mesh: mesh?.getAttribute("filename") || null,
+        };
+      }
+      const joints = [];
+      for (const joint of doc.querySelectorAll("robot > joint")) {
+        const limit = joint.querySelector("limit");
+        const axis = parseVec(joint.querySelector("axis")?.getAttribute("xyz") || "0 0 1", 3);
+        joints.push({
+          name: joint.getAttribute("name"),
+          type: joint.getAttribute("type"),
+          parent: joint.querySelector("parent")?.getAttribute("link"),
+          child: joint.querySelector("child")?.getAttribute("link"),
+          origin: originMatrix(joint.querySelector("origin")),
+          axis: new THREE.Vector3(axis[0], axis[1], axis[2]).normalize(),
+          lower: Number(limit?.getAttribute("lower") ?? -Math.PI),
+          upper: Number(limit?.getAttribute("upper") ?? Math.PI),
+        });
+      }
+      return { name: doc.querySelector("robot")?.getAttribute("name") || "robot", links, joints };
+    }
+
+    async function loadGeometry(path) {
+      const geom = await new STLLoader().loadAsync(path);
+      geom.computeVertexNormals();
+      return geom;
+    }
+
+    function addVisual(parent, link, geom) {
+      if (!geom) return;
+      const mat = new THREE.MeshStandardMaterial({
+        color: LINK_COLORS[link.name] ?? 0x9aa8b5,
+        metalness: 0.35,
+        roughness: 0.45,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.applyMatrix4(link.visualOrigin);
+      parent.add(mesh);
+    }
+
+    function fitCamera(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const max = Math.max(size.x, size.y, size.z, 0.4);
+      controls.target.copy(center);
+      camera.position.copy(center).add(new THREE.Vector3(max * 1.6, max * 1.2, max * 1.6));
+      camera.near = max / 200;
+      camera.far = max * 40;
+      camera.updateProjectionMatrix();
+      const span = Math.max(2, Math.ceil(max * 2));
+      grid.scale.setScalar(span / 2);
+    }
+
+    function resize() {
+      const w = viewport.clientWidth;
+      const h = viewport.clientHeight;
+      camera.aspect = w / Math.max(h, 1);
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const jointNodes = {};
+
+    function buildUi(joints) {
+      jointsEl.innerHTML = "";
+      for (const joint of joints) {
+        const minDeg = Math.round(joint.lower * RAD2DEG);
+        const maxDeg = Math.round(joint.upper * RAD2DEG);
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML = `
+          <label>
+            <span class="name">${joint.name}</span>
+            <span class="val" data-val>0.0°</span>
+          </label>
+          <input type="range" min="${minDeg}" max="${maxDeg}" step="0.1" value="0" />
+        `;
+        const input = row.querySelector("input");
+        const valEl = row.querySelector("[data-val]");
+        const apply = () => {
+          const deg = Number(input.value);
+          valEl.textContent = `${deg.toFixed(1)}°`;
+          const node = jointNodes[joint.name];
+          if (!node) return;
+          node.quaternion.setFromAxisAngle(joint.axis, deg * DEG2RAD);
+        };
+        input.addEventListener("input", apply);
+        joint._input = input;
+        joint._apply = apply;
+        jointsEl.appendChild(row);
+      }
+    }
+
+    function resetJoints(joints) {
+      for (const joint of joints) {
+        joint._input.value = "0";
+        joint._apply();
+      }
+    }
+
+    document.getElementById("reset").addEventListener("click", () => {
+      const joints = window.__joints;
+      if (joints) resetJoints(joints);
+    });
+    document.getElementById("copy").addEventListener("click", async () => {
+      const joints = window.__joints;
+      if (!joints) return;
+      const payload = Object.fromEntries(
+        joints.map((j) => [j.name, Number(j._input.value)])
+      );
+      const text = JSON.stringify(payload, null, 2);
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("关节角已复制到剪贴板（度）", "ok");
+      } catch {
+        setStatus(text, "ok");
+      }
+    });
+
+    (async function main() {
+      try {
+        if (location.protocol === "file:") {
+          throw new Error("请先运行同目录 serve.cmd，用本地服务器打开（file:// 无法加载 STL）");
+        }
+        const xml = await fetch(URDF_URL).then((r) => {
+          if (!r.ok) throw new Error(`无法读取 ${URDF_URL}`);
+          return r.text();
+        });
+        const model = parseUrdf(xml);
+        const childOf = new Set(model.joints.map((j) => j.child));
+        const roots = Object.keys(model.links).filter((n) => !childOf.has(n));
+        const meshPaths = [...new Set(Object.values(model.links).map((l) => l.mesh).filter(Boolean))];
+        const geoms = {};
+        await Promise.all(meshPaths.map(async (p) => { geoms[p] = await loadGeometry(p); }));
+
+        const linkObjects = {};
+        for (const name of Object.keys(model.links)) {
+          const obj = new THREE.Group();
+          obj.name = name;
+          addVisual(obj, model.links[name], geoms[model.links[name].mesh]);
+          linkObjects[name] = obj;
+        }
+        for (const root of roots) world.add(linkObjects[root]);
+        for (const joint of model.joints) {
+          const originNode = new THREE.Group();
+          originNode.name = `${joint.name}_origin`;
+          originNode.applyMatrix4(joint.origin);
+          const motion = new THREE.Group();
+          motion.name = joint.name;
+          originNode.add(motion);
+          linkObjects[joint.parent].add(originNode);
+          motion.add(linkObjects[joint.child]);
+          jointNodes[joint.name] = motion;
+        }
+
+        fitCamera(world);
+        buildUi(model.joints);
+        window.__joints = model.joints;
+        resetJoints(model.joints);
+        setStatus(`已加载 ${model.name}，${model.joints.length} 个关节`, "ok");
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || String(err), "err");
+      }
+    })();
+
+    function tick() {
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  </script>
+</body>
+</html>
