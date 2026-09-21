@@ -6,3 +6,10 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .Python
+
+# 生成文件
+焊接/out/
+robot_tools/elite_script_send/traces/
+
+# 现场日志与支持包
+问题排查/

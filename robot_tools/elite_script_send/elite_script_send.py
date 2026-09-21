@@ -2,16 +2,15 @@
 # -*- coding: utf-8 -*-
 """Elite 脚本下发测试界面 / 命令行。"""
 from __future__ import print_function
-
 import argparse
 import json
+from pathlib import Path
 import socket
 import sys
 import threading
 import time
 import traceback
 import webbrowser
-from pathlib import Path
 
 from sender import (
     DEFAULT_HOST,
