@@ -1,0 +1,2940 @@
+def fullFunctionWeldAxis():
+  # Preamble Script.
+  # Test Preamble Script To Be Added In The Future.
+  set_safety_mode_transition_hardness(1)
+  # Configuration Preamble Script.
+  # Configuration variables.
+  # 
+  global cleaner_gun_count_value
+  cleaner_gun_count_value = [0.38408, -0.1475, 0.57917, 3.14159, 0, -1.5708]
+  # 
+  global movej_cut_wire_safety_p
+  movej_cut_wire_safety_p = [0, -1.35532, -1.54174, -1.81533, 1.5708, 0]
+  # 
+  global movej_cut_wire_safety_q
+  movej_cut_wire_safety_q = [0.38408, -0.1475, 0.47531, -3.14159, 0, -1.5708]
+  # 
+  global movej_cut_wire_approach_p
+  movej_cut_wire_approach_p = [0, -1.32751, -1.83103, -1.55385, 1.5708, 0]
+  # 
+  global movej_cut_wire_approach_q
+  movej_cut_wire_approach_q = [0.38408, 0.0694, 0.47531, -3.14159, 0, -1.5708]
+  # 
+  global movel_cut_wire_p
+  movel_cut_wire_p = [0.5663, -1.27213, -1.8702, -1.57006, 1.5708, 0.5663]
+  # 
+  global movel_cut_wire_q
+  movel_cut_wire_q = [0.81243, -1.02675, -1.98868, -1.69696, 1.5708, 0.81243]
+  # 
+  global movel_cut_wire_back_p
+  movel_cut_wire_back_p = [0.28787, 0.0894, 0.48199, -3.14159, 0, -1.57079]
+  # 
+  global movel_cut_wire_back_q
+  movel_cut_wire_back_q = [0.81243, -1.02675, -1.98868, -1.69696, 1.5708, 0.81243]
+  set_tool_analog_io_work_mode(3)
+  set_tool_digital_io_work_mode(0)
+  set_tool_analog_input_domain(0)
+  set_tool_analog_output_domain(0)
+  set_tool_digital_io_config(0,0,False,False)
+  set_tool_digital_io_config(1,0,False,False)
+  set_tool_digital_io_config(2,0,False,False)
+  set_tool_digital_io_config(3,0,False,False)
+  tool_serial_config(False,115200,0,1,modbus_rtu = False,usage = 0)
+  set_tool_voltage(0)
+  set_tcp([0.0, 0.0, 0.1, 3.141592653589793, 0.0, 0.0])
+  set_payload(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+  set_standard_analog_input_domain(0, 1)
+  set_standard_analog_input_domain(1, 1)
+  set_standard_analog_output_domain(0, 0)
+  set_standard_analog_output_domain(1, 0)
+  set_input_actions_to_default()
+  set_gravity([0.0, 0.0, 9.82])
+  # Frame variables.
+  # Temporary frame variables.
+  # Conveyor Config
+  #--------------- Start WeldingDevice -----------------
+  global full_touch_sense_offset_value
+  full_touch_sense_offset_value = [0,0,0,0,0,0]
+  global full_touch_reference_point
+  full_touch_reference_point = [0,0,0,0,0,0]
+  global full_touch_sense_offset_calculate
+  full_touch_sense_offset_calculate = [0,0,0,0,0,0]
+  global full_touch_offset_enable
+  full_touch_offset_enable = False
+  global in_welding_path
+  in_welding_path = False
+  global full_sim_mode
+  full_sim_mode = True
+  global full_sim_mode_inspection_thread_id
+  full_sim_mode_inspection_thread_id = 0
+  global full_process
+  full_process = 0
+  global full_firstArc
+  full_firstArc = 0
+  global full_record_current
+  full_record_current = 0
+  global full_record_voltage
+  full_record_voltage = 0
+  def full_repeatable(i):
+     global full_firstArc
+     if full_firstArc>>i & 1 == 1:
+         halt()
+     else:
+         full_firstArc |= (1<<i)
+  end
+  def full_setRepeatable(i):
+     global full_firstArc
+     full_firstArc |= (1<<i)
+  end
+  def calculate_offset(offset_value,reference_point,deviation_allowance):
+     global full_touch_sense_offset_calculate
+     rad_to_deg = 180.0 / 3.1415926
+     for i in range(len(offset_value)):
+        full_touch_sense_offset_calculate[i] = offset_value[i] - reference_point[i]
+        if i >= 3:
+           full_touch_sense_offset_calculate[i] = full_touch_sense_offset_calculate[i] * rad_to_deg
+     for i in range(3):
+        if abs(full_touch_sense_offset_calculate[i]) > (deviation_allowance /1000):
+           popup(s="寻位结果超出偏差允许范围，是否要继续运行任务，<是>请点击<继续>，<否>请点击<停止任务>！", error=True,title="接触寻位", blocking=True)
+  end
+  def one_point_touch_offset(org,touch):
+     pose = elicopy.deepcopy(org)
+     pose[0]=touch[0]
+     pose[1]=touch[1]
+     pose[2]=touch[2]
+     pose[3]=org[3]
+     pose[4]=org[4]
+     pose[5]=org[5]
+     return pose
+  end
+  def touch_sense_offset(org,dir1,dir2,length):
+     pose = elicopy.deepcopy(org)
+     pose_diff = [0,0,0]
+     pose_diff[0] = dir2[0] - dir1[0]
+     pose_diff[1] = dir2[1] - dir1[1]
+     pose_diff[2] = dir2[2] - dir1[2]
+     pose_diff = normalize(pose_diff)
+     pose[0] = pose[0] + pose_diff[0] * length
+     pose[1] = pose[1] + pose_diff[1] * length
+     pose[2] = pose[2] + pose_diff[2] * length
+     return pose
+  end
+  def full_apply_touch_offset(target_pose):
+     if full_touch_offset_enable:
+        return pose_trans(full_touch_sense_offset_value,pose_trans_local(target_pose,full_touch_reference_point))
+     end
+     return target_pose
+  end
+  def calculation_offset(org,touch):
+     offset=[0,0,0]
+     offset[0]=touch[0]-org[0]
+     offset[1]=touch[1]-org[1]
+     offset[2]=touch[2]-org[2]
+     return offset
+  end
+  def overlay_first_offset(org,offset):
+     pnt=elicopy.deepcopy(org)
+     pnt[0]=org[0]+offset[0]
+     pnt[1]=org[1]+offset[1]
+     pnt[2]=org[2]+offset[2]
+     return pnt
+  end
+  def fail_touch_sense(message):
+       popup(s=message, error=True,title="接触寻位", blocking=True)
+       halt()
+  end
+  def is_zero_pose(pnt):
+     return pnt == [0] * len(pnt)
+  end
+  def point_distance(pnt1,pnt2):
+     return norm(vector_sub(pnt1,pnt2))
+  end
+  def average_offset(offset1,offset2):
+     offset=[0,0,0]
+     offset[0]=(offset1[0]+offset2[0])/2.0
+     offset[1]=(offset1[1]+offset2[1])/2.0
+     offset[2]=(offset1[2]+offset2[2])/2.0
+     return offset
+  end
+  def validate_point_group(points,index_array,min_distance,error_message):
+     for i in range(len(index_array)):
+       if is_zero_pose(points[index_array[i]]):
+         fail_touch_sense(error_message)
+       end
+       for j in range(i + 1, len(index_array)):
+         if point_distance(points[index_array[i]],points[index_array[j]]) < min_distance:
+           fail_touch_sense(error_message)
+         end
+       end
+     end
+  end
+  def validate_seek_group(seek_org,seek_dir,index_array,min_origin_spacing,min_direction_length,error_message):
+     for i in range(len(index_array)):
+       if is_zero_pose(seek_org[index_array[i]]):
+         fail_touch_sense(error_message)
+       end
+       if is_zero_pose(seek_dir[index_array[i]]):
+         fail_touch_sense(error_message)
+       end
+       if point_distance(seek_org[index_array[i]],seek_dir[index_array[i]]) < min_direction_length:
+         fail_touch_sense(error_message)
+       end
+       for j in range(i + 1, len(index_array)):
+         if point_distance(seek_org[index_array[i]],seek_org[index_array[j]]) < min_origin_spacing:
+           fail_touch_sense(error_message)
+         end
+       end
+     end
+  end
+  def vector_sub(vec1,vec2):
+    res_vec=[0,0,0]
+    res_vec[0]=vec1[0]-vec2[0]
+    res_vec[1]=vec1[1]-vec2[1]
+    res_vec[2]=vec1[2]-vec2[2]
+    return res_vec
+  end
+  def vector_add(vec1,vec2):
+    res_vec=[0,0,0]
+    res_vec[0]=vec1[0]+vec2[0]
+    res_vec[1]=vec1[1]+vec2[1]
+    res_vec[2]=vec1[2]+vec2[2]
+    return res_vec
+  end
+  def mul_scalar(vec1, s):
+    return [vec1[0]*s, vec1[1]*s, vec1[2]*s]
+  def solve_2x2(A11, A12, A21, A22, b1, b2, eps=1e-9):
+    det = A11*A22 - A12*A21
+    if abs(det) < eps:
+      popup(s="Error", error=True,title="singular or nearly singular 2x2 system", blocking=False)
+    inv_det = 1.0 / det
+    x = ( b1*A22 - A12*b2) * inv_det
+    y = (-b1*A21 + A11*b2) * inv_det
+    return x, y
+  end
+  
+  def circle_from_3points_3d(P1, P2, P3, eps=1e-9):
+    v1 = vector_sub(P2, P1)
+    v2 = vector_sub(P3, P1)
+    n = vector_v_product(v1, v2)
+    n_norm = norm(n)
+    if n_norm < eps:
+      popup(s="Error", error=True,title="three points are collinear or nearly collinear", blocking=False)
+    end
+    n_hat = normalize(n)
+    u = normalize(v1)  # first in-plane axis
+    v = vector_v_product(n_hat, u)
+    v = normalize(v)
+    def to_plane_coords(P):
+      d = vector_sub(P, P1)
+      return vector_o_product(d, u), vector_o_product(d, v)
+    end
+    x1, y1 = to_plane_coords(P1)
+    x2, y2 = to_plane_coords(P2)
+    x3, y3 = to_plane_coords(P3)
+    A11 = x2 - x1; A12 = y2 - y1
+    A21 = x3 - x1; A22 = y3 - y1
+    b1 = 0.5 * (x2*x2 + y2*y2 - x1*x1 - y1*y1)
+    b2 = 0.5 * (x3*x3 + y3*y3 - x1*x1 - y1*y1)
+    xc, yc = solve_2x2(A11, A12, A21, A22, b1, b2, eps=eps)
+    R = norm([x1 - xc, y1 - yc])
+    center_3d = vector_add(P1, vector_add(mul_scalar(u, xc), mul_scalar(v, yc)))
+    return center_3d, R, n_hat
+  end
+  def calculate_circle_center_frame_by_start_point(pnt_circle1, pnt_circle2, pnt_circle3):
+    center, radius, normal = circle_from_3points_3d(pnt_circle1, pnt_circle2, pnt_circle3)
+    vector_x=normalize(vector_sub(pnt_circle1,center))
+    vector_z=normal
+    vector_y=vector_v_product(vector_z,vector_x)
+    center_frame=cal_rpy_frame(center,vector_x,vector_y)
+    return center_frame
+  end
+  def overlay_second_offset(org,first_offset,second_offset,first_offset_normalized):
+     proj_length=vector_o_product(second_offset,first_offset_normalized)
+     perp_offset_second=[0,0,0]
+     perp_offset_second[0]=second_offset[0]-proj_length*first_offset_normalized[0]
+     perp_offset_second[1]=second_offset[1]-proj_length*first_offset_normalized[1]
+     perp_offset_second[2]=second_offset[2]-proj_length*first_offset_normalized[2]
+     pnt = elicopy.deepcopy(org)
+     pnt[0]=org[0]+first_offset[0]+second_offset[0]
+     pnt[1]=org[1]+first_offset[1]+second_offset[1]
+     pnt[2]=org[2]+first_offset[2]+second_offset[2]
+     return pnt
+  end
+  def overlay_third_offset(org,first_offset_normalized,second_offset_normalized,first_offset,second_offset,third_offset):
+     new_pnt =[0,0,0,0,0,0]
+     proj_vec=vector_v_product(first_offset_normalized,second_offset_normalized)
+     if proj_vec != [0] * len(proj_vec) :
+       proj_vec=normalize(proj_vec)
+     proj_length=vector_o_product(third_offset,proj_vec)
+     perp_offset_third=[0,0,0]
+     perp_offset_third[0]=proj_length*proj_vec[0]
+     perp_offset_third[1]=proj_length*proj_vec[1]
+     perp_offset_third[2]=proj_length*proj_vec[2]
+     offset=perp_offset_third
+     new_pnt=[0,0,0,0,0,0]
+     new_pnt[0]=org[0]+first_offset[0]+second_offset[0]+offset[0]
+     new_pnt[1]=org[1]+first_offset[1]+second_offset[1]+offset[1]
+     new_pnt[2]=org[2]+first_offset[2]+second_offset[2]+offset[2]
+     new_pnt[3]=org[3]
+     new_pnt[4]=org[4]
+     new_pnt[5]=org[5]
+     return new_pnt
+  end
+  def average_three_points(pnt1,pnt2,pnt3):
+      center=[0,0,0]
+      center[0]=(pnt1[0]+pnt2[0]+pnt3[0])/3.0
+      center[1]=(pnt1[1]+pnt2[1]+pnt3[1])/3.0
+      center[2]=(pnt1[2]+pnt2[2]+pnt3[2])/3.0
+      return center
+  end
+  def calculate_plane_frame_by_three_points(pnt1,pnt2,pnt3, eps=1e-9):
+      base_vec = vector_sub(pnt2, pnt1)
+      assist_vec = vector_sub(pnt3, pnt1)
+      if norm(base_vec) < eps:
+        fail_touch_sense("平面拟合失败，平面点重复。")
+      end
+      plane_normal = vector_v_product(base_vec, assist_vec)
+      if norm(plane_normal) < eps:
+        fail_touch_sense("平面拟合失败，平面点近共线。")
+      end
+      vector_x = normalize(base_vec)
+      vector_z = normalize(plane_normal)
+      vector_y = vector_v_product(vector_z, vector_x)
+      vector_y = normalize(vector_y)
+      plane_center = average_three_points(pnt1, pnt2, pnt3)
+      plane_frame = cal_rpy_frame(plane_center, vector_x, vector_y)
+      return plane_frame
+  end
+  def project_point_to_plane_local(pnt,plane_frame):
+      local_pnt = pose_trans_local(pnt, plane_frame)
+      local_pnt[2] = 0
+      return local_pnt
+  end
+  def map_pose_between_frames(pnt,source_frame,target_frame):
+      local_pnt = pose_trans_local(pnt, source_frame)
+      return pose_trans_world(local_pnt, target_frame)
+  end
+  def calculate_circle_frame_by_plane_and_circle_points(plane_pnt):
+      plane_frame = calculate_plane_frame_by_three_points(plane_pnt[0], plane_pnt[1], plane_pnt[2])
+      local_circle1 = project_point_to_plane_local(plane_pnt[3], plane_frame)
+      local_circle2 = project_point_to_plane_local(plane_pnt[4], plane_frame)
+      local_circle3 = project_point_to_plane_local(plane_pnt[5], plane_frame)
+      circle_frame_local = calculate_circle_center_frame_by_start_point(local_circle1, local_circle2, local_circle3)
+      return pose_trans_world(circle_frame_local, plane_frame), plane_frame
+  end
+  def overlay_Offset(org,first_offset,second_offset,first_offset_normalized):
+     new_pnt =[0,0,0,0,0,0]
+     proj_length=vector_o_product(second_offset,first_offset_normalized)
+     perp_offset=[0,0,0]
+     perp_offset[0]=second_offset[0]-proj_length*first_offset_normalized[0]
+     perp_offset[1]=second_offset[1]-proj_length*first_offset_normalized[1]
+     perp_offset[2]=second_offset[2]-proj_length*first_offset_normalized[2]
+     second_offset=perp_offset
+     new_pnt[0]=org[0]+first_offset[0]+second_offset[0]
+     new_pnt[1]=org[1]+first_offset[1]+second_offset[1]
+     new_pnt[2]=org[2]+first_offset[2]+second_offset[2]
+     new_pnt[3]=org[3]
+     new_pnt[4]=org[4]
+     new_pnt[5]=org[5]
+     return new_pnt
+  end
+  def pose_trans_local(world_pnt,frame):
+    return pose_trans(pose_inv(frame),world_pnt)
+  end
+  def pose_trans_world(local_pnt,frame):
+    return pose_trans(frame,local_pnt)
+  end
+  def two_point_get_vec(vec1,vec2):
+    result=[0,0,0]
+    result[0]=vec2[0]-vec1[0]
+    result[1]=vec2[1]-vec1[1]
+    result[2]=vec2[2]-vec1[2]
+    return result
+  end
+  def vector_o_product(vec1,vec2):
+    return vec1[0]*vec2[0]+vec1[1]*vec2[1]+vec1[2]*vec2[2]
+  end
+  def vector_v_product(vec1,vec2):
+    res_vec=[0,0,0]
+    res_vec[0]=vec1[1]*vec2[2]-vec1[2]*vec2[1]
+    res_vec[1]=vec1[2]*vec2[0]-vec1[0]*vec2[2]
+    res_vec[2]=vec1[0]*vec2[1]-vec1[1]*vec2[0]
+    return res_vec
+  end
+  def get_vertical_vec_by_three_point(pnt1,pnt2,vec_pnt):
+    vec1=[0,0,0]
+    vec1[0]=pnt2[0]-pnt1[0]
+    vec1[1]=pnt2[1]-pnt1[1]
+    vec1[2]=pnt2[2]-pnt1[2]
+    vec1=normalize(vec1)
+    vec2=[0,0,0]
+    vec2[0]=vec_pnt[0]-((pnt1[0]+pnt2[0])/2.0)
+    vec2[1]=vec_pnt[1]-((pnt1[1]+pnt2[1])/2.0)
+    vec2[2]=vec_pnt[2]-((pnt1[2]+pnt2[2])/2.0)
+    vec2=normalize(vec2)
+    ver_vec=vector_v_product(vec1,vec2)
+    return ver_vec
+  end
+  def two_point_touch_offset(pnt1,pnt2,vec_pnt,touch1,touch2,frame):
+    final_change=[0,0,0,0,0,0]
+    pnt1_local=pose_trans_local(pnt1,frame)
+    pnt2_local=pose_trans_local(pnt2,frame)
+    vec_pnt_local=pose_trans_local(vec_pnt,frame)
+    touch1_local=pose_trans_local(touch1,frame)
+    touch2_local=pose_trans_local(touch2,frame)
+    ver_vec=get_vertical_vec_by_three_point(pnt1_local,pnt2_local,vec_pnt_local)
+    if abs(norm(ver_vec))<0.0001:
+      return final_change
+    end
+    if (abs(ver_vec[0])>abs(ver_vec[1]))&(abs(ver_vec[0])>abs(ver_vec[2])):
+      pnt1_local[0]=0
+      pnt2_local[0]=0
+      touch1_local[0]=0
+      touch2_local[0]=0
+    elif (abs(ver_vec[1])>abs(ver_vec[0]))&(abs(ver_vec[1])>abs(ver_vec[2])):
+      pnt1_local[1]=0
+      pnt2_local[1]=0
+      touch1_local[1]=0
+      touch2_local[1]=0
+    elif (abs(ver_vec[2])>abs(ver_vec[0]))&(abs(ver_vec[2])>abs(ver_vec[1])):
+      pnt1_local[2]=0
+      pnt2_local[2]=0
+      touch1_local[2]=0
+      touch2_local[2]=0
+    else:
+      return final_change
+    end
+    final_change[0]=touch1_local[0]-pnt1_local[0]
+    final_change[1]=touch1_local[1]-pnt1_local[1]
+    final_change[2]=touch1_local[2]-pnt1_local[2]
+    new_vec1=two_point_get_vec(pnt1_local,pnt2_local)
+    new_vec1=normalize(new_vec1)
+    if abs(norm(new_vec1))<0.0001:
+      return final_change
+    end
+    new_vec2=two_point_get_vec(touch1_local,touch2_local)
+    new_vec2=normalize(new_vec2)
+    if abs(norm(new_vec2))<0.0001:
+      return final_change
+    end
+    angle=vector_o_product(new_vec1,new_vec2)/(norm(new_vec1)*norm(new_vec2))
+    if angle>1.0:
+      angle=1.0
+    end
+    if angle<-1.0:
+      angle=-1.0
+    end
+    angle=acos(angle)
+    if abs(angle)<0.0001:
+      return final_change
+    end
+    judge_vec=vector_v_product(new_vec1,new_vec2)
+    if abs(norm(judge_vec))<0.0001:
+      return final_change
+    end
+    judge_vec=normalize(judge_vec)
+    if abs(judge_vec[0])>0.9999:
+      if judge_vec[0]>0:
+        final_change[3]=angle
+      else:
+        final_change[3]=-angle
+      end
+      return final_change
+    end
+    if abs(judge_vec[1])>0.9999:
+      if judge_vec[1]>0:
+        final_change[4]=angle
+      else:
+        final_change[4]=-angle
+      end
+      return final_change
+    end
+    if abs(judge_vec[2])>0.9999:
+      if judge_vec[2]>0:
+        final_change[5]=angle
+      else:
+        final_change[5]=-angle
+      end
+      return final_change
+    end
+    return final_change
+  end
+  def last_point_touch_offset(pnt1,pnt2,vec_pnt,touch1,touch2,pnt3,touch3,frame):
+    final_change=[0,0,0,0,0,0]
+    pnt3_local=pose_trans_local(pnt3,frame)
+    touch3_local=pose_trans_local(touch3,frame)
+    touch1_local=pose_trans_local(touch1,frame)
+    touch2_local=pose_trans_local(touch2,frame)
+    pnt1_local=pose_trans_local(pnt1,frame)
+    pnt2_local=pose_trans_local(pnt2,frame)
+    vec_pnt_local=pose_trans_local(vec_pnt,frame)
+    ver_vec=get_vertical_vec_by_three_point(pnt1_local,pnt2_local,vec_pnt_local)
+    if abs(norm(ver_vec))<0.0001:
+      return final_change
+    end
+    if (abs(ver_vec[0])>abs(ver_vec[1]))&(abs(ver_vec[0])>abs(ver_vec[2])):
+      pnt3_local[0]=0
+      touch3_local[0]=0
+      touch1_local[0]=0
+      touch2_local[0]=0
+    elif (abs(ver_vec[1])>abs(ver_vec[0]))&(abs(ver_vec[1])>abs(ver_vec[2])):
+      pnt3_local[1]=0
+      touch3_local[1]=0
+      touch1_local[1]=0
+      touch2_local[1]=0
+    elif (abs(ver_vec[2])>abs(ver_vec[0]))&(abs(ver_vec[2])>abs(ver_vec[1])):
+      pnt3_local[2]=0
+      touch3_local[2]=0
+      touch1_local[2]=0
+      touch2_local[2]=0
+    else:
+      return final_change
+    end
+    new_vec3=two_point_get_vec(pnt3_local,touch3_local)
+    if abs(norm(new_vec3))<0.0001:
+      return final_change
+    end
+    new_vec2=two_point_get_vec(touch1_local,touch2_local)
+    if abs(norm(new_vec2))<0.0001:
+      return final_change
+    end
+    new_vec2=normalize(new_vec2)
+    value=vector_o_product(new_vec2,new_vec3)
+    final_change[0]=new_vec2[0]*value
+    final_change[1]=new_vec2[1]*value
+    final_change[2]=new_vec2[2]*value
+    return final_change
+  end
+  def cal_new_orientation_point(pnt1,pnt2,pnt3,inner_pnt,vec_pnt):
+    new_vec_pnt=elicopy.deepcopy(vec_pnt)
+    first_vec=two_point_get_vec(pnt1,pnt2)
+    first_vec=normalize(first_vec)
+    if abs(norm(first_vec))<0.0001:
+        return new_vec_pnt
+    end
+    second_vec=two_point_get_vec(pnt1,pnt3)
+    second_vec=normalize(second_vec)
+    if abs(norm(second_vec))<0.0001:
+        return new_vec_pnt
+    end
+    vec_dir=vector_v_product(first_vec,second_vec)
+    vec_dir=normalize(vec_dir)
+    if abs(norm(vec_dir))<0.0001:
+     return new_vec_pnt
+    end
+    len=vector_o_product(vec_dir,two_point_get_vec(inner_pnt,vec_pnt))
+    new_vec_pnt[0]=inner_pnt[0]+vec_dir[0]*len
+    new_vec_pnt[1]=inner_pnt[1]+vec_dir[1]*len
+    new_vec_pnt[2]=inner_pnt[2]+vec_dir[2]*len
+    return new_vec_pnt
+  end
+  global full_tracking_frame
+  full_tracking_frame = [0,0,0,0,0,0]
+  global full_tracking_thread_id
+  full_tracking_thread_id = 0
+  global full_reference_current
+  full_reference_current = 0
+  class KalmanFilter:
+      def __init__(self, process_variance, measurement_variance, initial_estimate=0.0, initial_error=1.0):
+          self.Q = process_variance
+          self.R = measurement_variance
+          self.x = initial_estimate
+          self.P = initial_error
+      def update(self, measurement):
+          self.P = self.P + self.Q
+          K = self.P / (self.P + self.R)
+          self.x = self.x + K * (measurement - self.x)
+          self.P = (1 - K) * self.P
+          return self.x
+  class PIDController:
+      def __init__(self, kp, ki, kd, setpoint):
+          self.kp = kp
+          self.ki = ki
+          self.kd = kd
+          self.setpoint = setpoint
+          self.previous_error = 0
+          self.integral = 0
+      def update(self, measured_value, dt):
+          error = self.setpoint - measured_value
+          self.integral += error * dt
+          derivative = (error - self.previous_error) / dt
+          output = self.kp * error + self.ki * self.integral + self.kd * derivative
+          self.previous_error = error
+          return output
+  def collect_current(duration_sec=5, interval_sec=0.1):
+      data = []
+      total_time = 0
+      while total_time < duration_sec:
+          current = 0
+          data.append(current)
+          total_time = total_time + interval_sec
+          sleep(interval_sec)
+      return data
+  def calculate_median(values):
+      if not values:
+          return 0.0
+      sorted_values = sorted(values)
+      n = len(sorted_values)
+      mid = n // 2
+      return (sorted_values[mid] if n % 2 == 1
+              else (sorted_values[mid - 1] + sorted_values[mid]) / 2)
+  def calculate_std(values):
+      if len(values) < 2:
+          return 0.0
+      mean = sum(values) / len(values)
+      variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+      if variance < 0:
+          variance = variance * -1
+      return variance
+  def median_filter(signal, kernel_size=5):
+      filtered = []
+      half = kernel_size // 2
+      for i in range(len(signal)):
+          start = max(0, i - half)
+          end = min(len(signal), i + half + 1)
+          window = signal[start:end]
+          sorted_window = sorted(window)
+          n = len(sorted_window)
+          if n % 2 == 1:
+              median = sorted_window[n // 2]
+          else:
+              median = (sorted_window[(n // 2) - 1] + sorted_window[n // 2]) / 2
+          filtered.append(median)
+      return filtered
+  def trapezoidal_integrate(y, x):
+      area = 0.0
+      for i in range(1, len(y)):
+          delta_x = x[i] - x[i - 1]
+          avg_y = (y[i - 1] + y[i]) / 2
+          area += avg_y * delta_x
+      return area
+  def calculate_areas(I):
+      t = [0.0] * len(I)
+      t[0] = 0.01
+      for i in range(1, len(I)):
+          t[i] = t[i - 1] + 0.01
+      net_area = trapezoidal_integrate(I, t)
+      return net_area
+  def calculate_baseline(data, window_size=200, threshold=3):
+      filtered = []
+      data_len = len(data)
+      for i in range(data_len):
+          start = max(0, i - window_size)
+          window = data[start:i + 1]
+          window_median = calculate_median(window)
+          window_std = calculate_std(window)
+          if window_std == 0:
+              filtered.append(data[i])
+          else:
+              if abs(data[i] - window_median) < threshold * window_std:
+                  filtered.append(data[i])
+      if not filtered:
+          return 0.0
+      return calculate_median(filtered)
+  def get_reference_current(startTime, rcTime,sampled):
+      global full_reference_current
+      sampled[0] = True
+      sleep(startTime)
+      current_data = collect_current(rcTime,0.01)
+      current = calculate_baseline(current_data)
+      full_reference_current = current
+      return current
+  def cal_forward_frame(pnt_start,pnt_end):
+      forward_frame=[0,0,0,0,0,0]
+      forward_vec=two_point_get_vec(pnt_start,pnt_end)
+      if abs(norm(forward_vec))<0.0001:
+          return forward_frame
+      end
+      forward_vec=normalize(forward_vec)
+      cur_tool_pose=get_actual_tcp_pose()
+      cos0 = cos(cur_tool_pose[3])
+      cos1 = cos(cur_tool_pose[4])
+      cos2 = cos(cur_tool_pose[5])
+      sin0 = sin(cur_tool_pose[3])
+      sin1 = sin(cur_tool_pose[4])
+      sin2 = sin(cur_tool_pose[5])
+      z_dir = [0.0, 0.0, 1.0]
+      z_dir[0] = cos2 * sin1 * cos0 + sin2 * sin0
+      z_dir[1] = sin2 * sin1 * cos0 - cos2 * sin0
+      z_dir[2] = cos1 * cos0
+      if abs(norm(z_dir))<0.0001:
+          return forward_frame
+      end
+      z_dir=normalize(z_dir)
+      y_dir=vector_v_product(z_dir,forward_vec)
+      if abs(norm(y_dir))<0.0001:
+          return forward_frame
+      end
+      origin_pnt=[cur_tool_pose[0],cur_tool_pose[1],cur_tool_pose[2]]
+      forward_frame=cal_rpy_frame(origin_pnt,forward_vec,y_dir)
+      return forward_frame
+  end
+  def cal_current_direction(track_frame):
+    accuracy = 0.001
+    cos0 = cos(track_frame[3])
+    cos1 = cos(track_frame[4])
+    cos2 = cos(track_frame[5])
+    sin0 = sin(track_frame[3])
+    sin1 = sin(track_frame[4])
+    sin2 = sin(track_frame[5])
+    frame_y_dir = [0.0, 1.0, 0.0]
+    frame_y_dir[0] = cos2 * sin1 * sin0 - sin2 * cos0
+    frame_y_dir[1] = sin2 * sin1 * sin0 + cos2 * cos0
+    frame_y_dir[2] = cos1 * sin0
+    if abs(norm(frame_y_dir))<accuracy:
+      return 0
+    end
+    cur_tool_pose=get_target_tcp_pose_along_path()
+    ori_to_tool=two_point_get_vec(track_frame,cur_tool_pose)
+    if abs(norm(ori_to_tool))<accuracy:
+      return 0
+    end
+  
+    result=vector_o_product(frame_y_dir,ori_to_tool)
+    if result > accuracy:
+      return 1
+    end
+    if result < (-1 * accuracy):
+      return -1
+    end
+    return 0
+  end
+  def calculate_y_axis_z_axis_offset_in_base_frame(y_offset,z_offset,local_offset_frame):
+    cos0 = cos(local_offset_frame[3])
+    cos1 = cos(local_offset_frame[4])
+    cos2 = cos(local_offset_frame[5])
+    sin0 = sin(local_offset_frame[3])
+    sin1 = sin(local_offset_frame[4])
+    sin2 = sin(local_offset_frame[5])
+    ## calculate local offset frame z axis direction
+    local_z_dir = [0.0, 0.0, 1.0]
+    local_z_dir[0] = cos2 * sin1 * cos0 + sin2 * sin0
+    local_z_dir[1] = sin2 * sin1 * cos0 - cos2 * sin0
+    local_z_dir[2] = cos1 * cos0
+    ## calculate y offset in base frame
+    base_z_offset = [0.0, 0.0, 1.0]
+    base_z_offset[0] = z_offset * local_z_dir[0]
+    base_z_offset[1] = z_offset * local_z_dir[1]
+    base_z_offset[2] = z_offset * local_z_dir[2]
+    ## calculate local offset frame y axis direction
+    local_y_dir = [0.0, 1.0, 0.0]
+    local_y_dir[0] = cos2 * sin1 * sin0 - sin2 * cos0
+    local_y_dir[1] = sin2 * sin1 * sin0 + cos2 * cos0
+    local_y_dir[2] = cos1 * sin0
+    ## calculate y offset in base frame
+    base_y_offset = [0.0, 1.0, 0.0]
+    base_y_offset[0] = y_offset * local_y_dir[0]
+    base_y_offset[1] = y_offset * local_y_dir[1]
+    base_y_offset[2] = y_offset * local_y_dir[2]
+    result_offset = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    result_offset[0] = base_z_offset[0] + base_y_offset[0]
+    result_offset[1] = base_z_offset[1] + base_y_offset[1]
+    result_offset[2] = base_z_offset[2] + base_y_offset[2]
+    return result_offset
+  end
+  def stepwise_zero(value):
+      step = 0.002
+      if value > 0:
+          value = max(value - step, 0.0)
+      else:
+          value = min(value + step, 0.0)
+      if -1e-10 < value < 1e-10:
+          return 0.0
+      return value
+  end
+  def path_offset_clear():
+      offset = path_offset_get(1)
+      while offset != [0] * len(offset):
+          x = stepwise_zero(offset[0])
+          y = stepwise_zero(offset[1])
+          z = stepwise_zero(offset[2])
+          rx = stepwise_zero(offset[3])
+          ry = stepwise_zero(offset[4])
+          rz = stepwise_zero(offset[5])
+          path_offset_set([x,y,z,rx,ry,rz], 1)
+          sync()
+          offset = path_offset_get(1)
+      end
+  end
+  def full_arc_tracking(maxOffset, type, rcTime=0.1, isConstant = False,current = 160.0, lrOffset = 0.5, upOffset = 0.5,startTime = 2.0,startCyc = 3,udMax = 0.005,lrMax = 0.005):
+      import time
+      global full_arc_alarm_thread_id
+      global full_reference_current
+      global full_tracking_frame
+      full_reference_current = current
+      kf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=full_reference_current)
+      controller = PIDController(kp=0.5, ki=0.1, kd=0.01, setpoint=0)
+      lrkf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=0)
+      lrController = PIDController(kp=0.5, ki=0.01, kd=0.01, setpoint=0)
+      sampled = [False]
+      path_offset_enable()
+      path_offset_set_alpha_filter(0.1)
+      path_offset_set_max_offset(maxOffset, 1.0)
+      path_offset_set([0,0,0,0,0,0], 1)
+      global zOffset
+      zOffset = 0.0
+      global yOffset
+      yOffset = 0
+      lCurrent = []
+      rCurrent = []
+      udCurrent = []
+      cycleIndex = 0
+      prev_state = 0
+      lastDir = 0
+      lastTimestamp = int(time.time() * 1000)
+      while True:
+          if full_arc_alarm_thread_id == 0:
+              sampled[0] = False
+              cycleIndex = 0
+              lastDir = 0
+              reference_current = 0 if not isConstant else current
+              kf = None
+              path_offset_clear()
+              sleep(0.1)
+          elif not sampled[0] and not isConstant:
+              start_thread(get_reference_current,(startTime,rcTime,sampled))
+              sleep(0.1)
+              cycleIndex = 0
+          else:
+              current = 0
+              ret = 0
+              if full_tracking_frame != [0] * len(full_tracking_frame):
+                  ret = cal_current_direction(full_tracking_frame)
+                  lastDir = lastDir | (ret if ret >= 0 else 2)
+              if type >> 1 & 1 == 1:
+                  if ret == 0 and lastDir == 3:
+                      cycleIndex += 1
+                      lastDir = 0
+                      if len(lCurrent) > 0 and len(rCurrent) > 0 :
+                          la = calculate_areas(lCurrent)
+                          ra = calculate_areas(rCurrent)
+                          y = (la - ra) * lrOffset / 5200
+                          y = lrkf.update(y)
+                          y = lrController.update(y, 1)
+                          if cycleIndex >= startCyc :
+                            y = min(lrMax,y)
+                            yOffset = yOffset + y
+                          lCurrent.clear()
+                          rCurrent.clear()
+                  elif ret > 0:
+                      lCurrent.append(current)
+                  elif ret < 0:
+                      rCurrent.append(current)
+              end
+              if sampled[0] == True and kf == None and full_reference_current > 0 :
+                  kf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=full_reference_current)
+              if type & 1 == 1 and full_reference_current > 0:
+                  filtered = 0
+                  timestamp_ms = int(time.time() * 1000)
+                  if full_tracking_frame != [0] * len(full_tracking_frame) and ret == 0:
+                          if lastDir == 3:
+                             filtered = calculate_baseline(udCurrent)
+                             udCurrent.clear()
+                          else:
+                             udCurrent.append(current)
+                  elif timestamp_ms - lastTimestamp >= 100:
+                      filtered = calculate_baseline(udCurrent)
+                      lastTimestamp = timestamp_ms
+                      udCurrent.clear()
+                  else:
+                      udCurrent.append(current)
+                  if filtered != 0:
+                      z = kf.update(filtered)
+                      z = (z - full_reference_current) / 1.0
+                      z = controller.update(z, 1)
+                      z = z / 5000.0 * upOffset
+                      z = min(udMax,z)
+                      zOffset = z
+              end
+              if abs(zOffset) > 0.0001 or abs(yOffset) > 0.0001:
+                  if full_tracking_frame == [0] * len(full_tracking_frame):
+                      path_offset_set([0,0,zOffset,0,0,0], 3)
+                  else:
+                      offset_frame = calculate_y_axis_z_axis_offset_in_base_frame(yOffset, zOffset * -1,full_tracking_frame)
+                      path_offset_set(offset_frame, 1)
+                  end
+                  sleep(0.002)
+              end
+          end
+      end
+  end
+  def full_arc_on(process):
+      pass
+  end
+  def full_arc_off():
+      pass
+  end
+  def full_touch_sense_enable(enable):
+      pass
+  end
+  def full_get_touch_sense_signal():
+      return False
+  end
+  def full_sim_mode_inspection():
+      global full_sim_mode
+      global full_process
+      global in_welding_path
+      last_sim_mode = full_sim_mode
+      while True:
+          if full_sim_mode == last_sim_mode:
+              sleep(0.5)
+          elif full_sim_mode == False  and in_welding_path == True:
+              null
+              last_sim_mode = full_sim_mode
+          elif in_welding_path == True:
+              null
+              last_sim_mode = full_sim_mode
+      end
+  end
+  global full_err_id
+  full_err_id = 0
+  def full_err():
+     while True:
+        sync()
+     end
+  end
+  full_err_id = start_thread(full_err, ())
+  def move_thread_touch_path(org,direction1,direction2,length,speed):
+     global move_thread_flag_u23547u20301
+     move_thread_flag_u23547u20301 = 1
+     movel(touch_sense_offset(org,direction1,direction2,length),1.3962634,speed)
+     move_thread_flag_u23547u20301 = 2
+  end
+  global full_touch_sense_frame
+  full_touch_sense_frame = [0,0,0,0,0,0]
+  global full_touch_point_new
+  full_touch_point_new = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global touch_failure_mark
+  touch_failure_mark = False
+  global touch_failure_frequency
+  touch_failure_frequency = 0
+  global z_reference_local
+  z_reference_local = [0,0,0,0,0,0]
+  global z_touch_local
+  z_touch_local = [0,0,0,0,0,0]
+  global z_offset_value
+  z_offset_value = 0
+  def full_searching_touch_sense(org,direction1,direction2,length,speed,tactics):
+     global move_thread_flag_u23547u20301
+     move_thread_flag_u23547u20301 = 0
+     global touch_failure_mark
+     global touch_failure_frequency
+     full_touch_sense_enable(True)
+     move_thread_han_u23547u20301 = start_thread(move_thread_touch_path,(org,direction1,direction2,length,speed))
+     while (True):
+         sleep(0.01)
+         if (move_thread_flag_u23547u20301 > 1):
+            stop_thread(move_thread_han_u23547u20301)
+            full_touch_sense_enable(False)
+            popup(s="超过寻位距离", error=True,title="寻位失败", blocking=False)
+            if (tactics == 0):
+               touch_failure_frequency = touch_failure_frequency + 1
+               touch_failure_mark = False
+               pause()
+               return [0,0,0,0,0,0]
+            else:
+               touch_failure_mark = False
+               touch_failure_frequency = 0
+               halt()
+         end
+         if (full_get_touch_sense_signal()):
+             full_touch_sense_enable(False)
+             stop_thread(move_thread_han_u23547u20301)
+             touch_failure_mark = True
+             touch_failure_frequency = 0
+             return get_actual_tcp_pose()
+         end
+         sync()
+     end
+  end
+  def full_cleaner_parameter_setting(cleaner_gun_set_value):
+     global cleaner_gun_count_value
+     if cleaner_gun_count_value < (cleaner_gun_set_value - 1):
+        cleaner_gun_count_value = cleaner_gun_count_value + 1
+        return False
+     end
+     cleaner_gun_count_value = 0
+     while True:
+        break
+        sync()
+     end
+     while True:
+        break
+        sync()
+     end
+     return True
+  end
+  def full_cylinder_clamping_detect():
+     while True:
+        return
+        sync()
+     end
+  end
+  def full_motor_reset_detect():
+     while True:
+        return
+        sync()
+     end
+  end
+  def full_cut_wire(time):
+     unconfigured
+     unconfigured
+     sleep(time)
+  end
+  def full_cut_wire_reset():
+     unconfigured
+  end
+  #--------------- End WeldingDevice -----------------
+  #--------------- Start FullWeldingFunction -----------------
+  class MAGParameterSet:
+    def __init__(self,
+      work_type, expert_number, job_number, advance_air_supply, arc_starting_current,
+      arc_starting_voltage, arc_start_time, time_of_transition_c, welding_current, welding_voltage,
+      correction_of_inductance, speed_of_welding, backoff_distance_d, time_of_transition_e, arc_closing_current,
+      arc_closing_voltage, arc_closing_time, welding_wire_reburning, delayed_supply, advance_air_supply_job,
+      arc_start_time_job, speed_of_welding_job,backoff_distance_job, arc_closing_time_job, delayed_supply_job):
+      self.work_type = work_type
+      self.expert_number = expert_number
+      self.job_number = job_number
+      self.advance_air_supply = advance_air_supply
+      self.arc_starting_current = arc_starting_current
+      self.arc_starting_voltage = arc_starting_voltage
+      self.arc_start_time = arc_start_time
+      self.time_of_transition_c = time_of_transition_c
+      self.welding_current = welding_current
+      self.welding_voltage = welding_voltage
+      self.correction_of_inductance = correction_of_inductance
+      self.speed_of_welding = speed_of_welding
+      self.backoff_distance_d = backoff_distance_d
+      self.time_of_transition_e = time_of_transition_e
+      self.arc_closing_current = arc_closing_current
+      self.arc_closing_voltage = arc_closing_voltage
+      self.arc_closing_time = arc_closing_time
+      self.welding_wire_reburning = welding_wire_reburning
+      self.delayed_supply = delayed_supply
+      self.advance_air_supply_job = advance_air_supply_job
+      self.arc_start_time_job = arc_start_time_job
+      self.speed_of_welding_job = speed_of_welding_job
+      self.backoff_distance_job = backoff_distance_job
+      self.arc_closing_time_job = arc_closing_time_job
+      self.delayed_supply_job = delayed_supply_job
+  MAGParameters = [
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+      MAGParameterSet(0,1,1,0.5,105,0.0,0.5,0.5,0.0,0.0,0,6.0,5,0.5,60,0.0,0.5,0,0.5,0.5,0.5,6,5,1.5,0.5),
+  ]
+  #--------------- Start Swing PathOffset -----------------
+  global full_current_mag_process
+  full_current_mag_process = -1
+  global full_swing_thread_id
+  full_swing_thread_id = 0
+  global full_swing_process_index
+  full_swing_process_index = -1
+  global full_swing_enabled
+  full_swing_enabled = False
+  global full_swing_last_offset
+  full_swing_last_offset = [0,0,0,0,0,0]
+  global full_swing_last_velocity
+  full_swing_last_velocity = [0,0,0,0,0,0]
+  global full_swing_control_period
+  full_swing_control_period = 0.001
+  global full_swing_offset_type
+  full_swing_offset_type = 3
+  global full_swing_alpha_filter
+  full_swing_alpha_filter = 1.0
+  global full_swing_start_ramp_time
+  full_swing_start_ramp_time = 0.2
+  global full_swing_min_forward_speed
+  full_swing_min_forward_speed = 0.0002
+  global full_swing_stop_clear_speed
+  full_swing_stop_clear_speed = 0.05
+  global full_swing_max_offset_speed
+  full_swing_max_offset_speed = 0.25
+  global full_swing_max_offset_accel
+  full_swing_max_offset_accel = 2.40
+  class SwingParameterSet:
+    def __init__(self, type, amplitude, period, left_stay_time, right_stay_time, angle, center_stay_time, depth, width, direction, blend_radius):
+      self.type = type
+      self.amplitude = amplitude
+      self.period = period
+      self.left_stay_time = left_stay_time
+      self.right_stay_time = right_stay_time
+      self.angle = angle
+      self.center_stay_time = center_stay_time
+      self.depth = depth
+      self.width = width
+      self.direction = direction
+      self.blend_radius = blend_radius
+  SwingParameters = [
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+      SwingParameterSet(3,0.002,2.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0),
+  ]
+  def full_zero_offset():
+      return [0,0,0,0,0,0]
+  end
+  def full_copy_offset(offset):
+      copied = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          copied[i] = offset[i]
+          i = i + 1
+      end
+      return copied
+  end
+  def full_scale_offset(offset, scale):
+      result = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          result[i] = offset[i] * scale
+          i = i + 1
+      end
+      return result
+  end
+  def full_sqrt(value):
+      if value <= 0:
+          return 0.0
+      end
+      guess = value
+      if guess < 1.0:
+          guess = 1.0
+      end
+      i = 0
+      while i < 12:
+          guess = 0.5 * (guess + value / guess)
+          i = i + 1
+      end
+      return guess
+  end
+  def full_abs(value):
+      if value < 0:
+          return -value
+      end
+      return value
+  end
+  def full_smootherstep01(value):
+      if value <= 0:
+          return 0.0
+      elif value >= 1:
+          return 1.0
+      end
+      return value * value * value * (value * (value * 6.0 - 15.0) + 10.0)
+  end
+  def full_swing_offset_distance(offset):
+      return full_sqrt(offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2])
+  end
+  def full_swing_pose_delta3(a, b):
+      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+  end
+  def full_swing_center_tcp_pose():
+      pose = get_target_tcp_pose_along_path()
+      if len(pose) < 6:
+          pose = get_actual_tcp_pose()
+      end
+      return pose
+  end
+  def full_swing_period_length(params, forward_speed):
+      if params.type == 3:
+          if params.period <= 0 or forward_speed <= 0:
+              return 0.0
+          end
+          return forward_speed / params.period
+      end
+      return params.period
+  end
+  def full_swing_mag_forward_speed():
+      global full_current_mag_process
+      if full_current_mag_process >= 0 and full_current_mag_process < len(MAGParameters):
+          speed = MAGParameters[full_current_mag_process].speed_of_welding
+          if MAGParameters[full_current_mag_process].work_type == 2 and MAGParameters[full_current_mag_process].speed_of_welding_job > 0:
+              speed = MAGParameters[full_current_mag_process].speed_of_welding_job
+          end
+          return speed / 1000.0
+      end
+      return 0.0
+  end
+  def full_swing_dwell_ratio(dwell_time, forward_speed, period_length):
+      if dwell_time <= 0 or forward_speed <= 0 or period_length <= 0:
+          return 0.0
+      end
+      return dwell_time * forward_speed / period_length
+  end
+  def full_swing_phase(active_distance, period_length):
+      if period_length <= 0:
+          return 0.0
+      end
+      phase = active_distance / period_length
+      return phase - int(phase)
+  end
+  def full_swing_ramp_scale(elapsed_time, ramp_time):
+      if ramp_time <= 0:
+          return 1.0
+      end
+      return full_smootherstep01(elapsed_time / ramp_time)
+  end
+  def full_swing_add_x_offset(offset, x):
+      result = full_copy_offset(offset)
+      result[0] = result[0] + x
+      return result
+  end
+  def full_swing_two_side_actual_phase(phase, left_ratio, right_ratio):
+      if left_ratio <= 0 and right_ratio <= 0:
+          return phase
+      end
+      rest = 1.0 - left_ratio - right_ratio
+      if rest <= 0:
+          return phase
+      end
+      move_ratio = rest / 2.0
+      s1 = left_ratio
+      s2 = left_ratio + move_ratio
+      s3 = left_ratio + move_ratio + right_ratio
+      actual_phase = 0.0
+      if phase < s1:
+          actual_phase = 0.0
+      elif phase < s2:
+          actual_phase = 0.5 * full_smootherstep01((phase - s1) / move_ratio)
+      elif phase < s3:
+          actual_phase = 0.5
+      else:
+          actual_phase = 0.5 + 0.5 * full_smootherstep01((phase - s3) / move_ratio)
+      end
+      return actual_phase
+  end
+  def full_swing_two_side_stop_phase(phase, left_ratio, right_ratio):
+      rest = 1.0 - left_ratio - right_ratio
+      if rest <= 0:
+          return False
+      end
+      move_ratio = rest / 2.0
+      stop_start = left_ratio + move_ratio
+      stop_end = stop_start + right_ratio
+      return phase < left_ratio or (phase >= stop_start and phase < stop_end)
+  end
+  def full_swing_main_hold_x(phase, period_length, left_ratio, right_ratio):
+      if period_length <= 0:
+          return 0.0
+      end
+      return period_length * (full_swing_two_side_actual_phase(phase, left_ratio, right_ratio) - phase)
+  end
+  def full_swing_trapezoid_actual_phase(phase, left_ratio, right_ratio):
+      if left_ratio <= 0 and right_ratio <= 0:
+          return phase
+      end
+      rest = 1.0 - left_ratio - right_ratio
+      if rest <= 0:
+          return phase
+      end
+      step = rest / 4.0
+      s1 = step
+      s2 = step + left_ratio
+      s3 = 2.0 * step + left_ratio
+      s4 = 3.0 * step + left_ratio
+      s5 = 3.0 * step + left_ratio + right_ratio
+      actual_phase = 0.0
+      if phase < s1:
+          actual_phase = 0.25 * phase / step
+      elif phase < s2:
+          actual_phase = 0.25
+      elif phase < s3:
+          actual_phase = 0.25 + 0.25 * (phase - s2) / step
+      elif phase < s4:
+          actual_phase = 0.5 + 0.25 * (phase - s3) / step
+      elif phase < s5:
+          actual_phase = 0.75
+      else:
+          actual_phase = 0.75 + 0.25 * (phase - s5) / step
+      end
+      return actual_phase
+  end
+  def full_swing_zigzag_actual_phase(phase, left_ratio, center_ratio, right_ratio):
+      if left_ratio <= 0 and center_ratio <= 0 and right_ratio <= 0:
+          return phase
+      end
+      rest = 1.0 - left_ratio - center_ratio - right_ratio
+      if rest <= 0:
+          return phase
+      end
+      step = rest / 4.0
+      s1 = step
+      s2 = step + right_ratio
+      s3 = 2.0 * step + right_ratio
+      s4 = 2.0 * step + right_ratio + center_ratio
+      s5 = 3.0 * step + right_ratio + center_ratio
+      s6 = 3.0 * step + right_ratio + center_ratio + left_ratio
+      actual_phase = 0.0
+      if phase < s1:
+          actual_phase = 0.25 * phase / step
+      elif phase < s2:
+          actual_phase = 0.25
+      elif phase < s3:
+          actual_phase = 0.25 + 0.25 * (phase - s2) / step
+      elif phase < s4:
+          actual_phase = 0.5
+      elif phase < s5:
+          actual_phase = 0.5 + 0.25 * (phase - s4) / step
+      elif phase < s6:
+          actual_phase = 0.75
+      else:
+          actual_phase = 0.75 + 0.25 * (phase - s6) / step
+      end
+      return actual_phase
+  end
+  def full_swing_zigzag_stop_phase(phase, left_ratio, center_ratio, right_ratio):
+      rest = 1.0 - left_ratio - center_ratio - right_ratio
+      if rest <= 0:
+          return False
+      end
+      step = rest / 4.0
+      right_start = step
+      right_end = step + right_ratio
+      center_start = 2.0 * step + right_ratio
+      center_end = center_start + center_ratio
+      left_start = 3.0 * step + right_ratio + center_ratio
+      left_end = left_start + left_ratio
+      return (phase >= right_start and phase < right_end) or (phase >= center_start and phase < center_end) or (phase >= left_start and phase < left_end)
+  end
+  def full_swing_zigzag_offset(params, phase, forward_speed, period_length):
+      left_ratio = full_swing_dwell_ratio(params.left_stay_time, forward_speed, period_length)
+      center_ratio = full_swing_dwell_ratio(params.center_stay_time, forward_speed, period_length)
+      right_ratio = full_swing_dwell_ratio(params.right_stay_time, forward_speed, period_length)
+      rest = 1.0 - left_ratio - center_ratio - right_ratio
+      if rest <= 0:
+          return full_zero_offset()
+      end
+      actual_phase = full_swing_zigzag_actual_phase(phase, left_ratio, center_ratio, right_ratio)
+      step = 0.25
+      ratio = 0.0
+      if actual_phase < step:
+          ratio = actual_phase / step
+      elif actual_phase < 2.0 * step:
+          ratio = 1.0 - (actual_phase - step) / step
+      elif actual_phase < 3.0 * step:
+          ratio = -(actual_phase - 2.0 * step) / step
+      else:
+          ratio = -1.0 * (1.0 - (actual_phase - 3.0 * step) / step)
+      end
+      angle = params.angle / 2.0
+      y = params.amplitude * sin(angle) * ratio
+      z = -params.amplitude * cos(angle) * full_abs(ratio)
+      return full_swing_add_x_offset([0,y,z,0,0,0], period_length * (actual_phase - phase))
+  end
+  def full_swing_circle_offset(params, phase, period_length):
+      longitudinal_radius = (period_length / 2.0 + params.width) / 2.0
+      lateral_radius = params.amplitude
+      if longitudinal_radius <= 0:
+          longitudinal_radius = lateral_radius
+      end
+      if longitudinal_radius <= 0 or lateral_radius <= 0:
+          return full_zero_offset()
+      end
+      angle = phase * 6.2831853071796
+      x = longitudinal_radius * (1.0 - cos(angle))
+      y = lateral_radius * sin(angle)
+      if params.direction != 0:
+          y = -y
+      end
+      return [x,-y,0,0,0,0]
+  end
+  def full_swing_crescent_curve(params, u, start_y, end_y, period_length):
+      if u <= 0:
+          return [0,-start_y,0,0,0,0]
+      elif u >= 1:
+          return [0,-end_y,0,0,0,0]
+      end
+      depth = full_swing_clamp(params.depth, -1.0, 1.0)
+      segment_length = period_length * 0.5
+      max_bulge = segment_length * 0.30
+      x_bulge = segment_length * 0.60 * depth
+      x_bulge = full_swing_clamp(x_bulge, -max_bulge, max_bulge)
+      angle = u * 3.1415926535898
+      s = sin(angle)
+      y = start_y * cos(angle)
+      x = x_bulge * s * s
+      return [x,-y,0,0,0,0]
+  end
+  def full_swing_crescent_offset(params, phase, forward_speed, period_length):
+      left_ratio = full_swing_dwell_ratio(params.left_stay_time, forward_speed, period_length)
+      right_ratio = full_swing_dwell_ratio(params.right_stay_time, forward_speed, period_length)
+      rest = 1.0 - left_ratio - right_ratio
+      if rest <= 0:
+          return full_zero_offset()
+      end
+      actual_phase = full_swing_two_side_actual_phase(phase, left_ratio, right_ratio)
+      x_hold = period_length * (actual_phase - phase)
+      if actual_phase < 0.5:
+          return full_swing_add_x_offset(full_swing_crescent_curve(params, actual_phase / 0.5, params.amplitude, -params.amplitude, period_length), x_hold)
+      end
+      return full_swing_add_x_offset(full_swing_crescent_curve(params, (actual_phase - 0.5) / 0.5, -params.amplitude, params.amplitude, period_length), x_hold)
+  end
+  def full_swing_trapezoid_blend_u(u, blend_radius, segment_length, blend_at_start):
+      u = full_swing_clamp(u, 0.0, 1.0)
+      if blend_radius <= 0 or segment_length <= 0:
+          return u
+      end
+      if blend_radius != blend_radius:
+          return u
+      end
+      blend = full_swing_clamp(blend_radius / segment_length, 0.0, 0.5)
+      if blend <= 0:
+          return u
+      end
+      if blend_at_start == True:
+          if u >= blend:
+              return u
+          end
+          t = u / blend
+          return blend * t * t * (2.0 - t)
+      end
+      start = 1.0 - blend
+      if u <= start:
+          return u
+      end
+      t = (u - start) / blend
+      return start + blend * (t + t * t - t * t * t)
+  end
+  def full_swing_trapezoid_offset(params, phase, forward_speed, period_length):
+      if forward_speed <= 0 or period_length <= 0:
+          return full_zero_offset()
+      end
+      left_ratio = full_swing_dwell_ratio(params.left_stay_time, forward_speed, period_length)
+      right_ratio = full_swing_dwell_ratio(params.right_stay_time, forward_speed, period_length)
+      rest = 1.0 - left_ratio - right_ratio
+      if rest <= 0:
+          return full_zero_offset()
+      end
+      actual_phase = full_swing_trapezoid_actual_phase(phase, left_ratio, right_ratio)
+      step = 0.25
+      segment_length = period_length * rest / 4.0
+      y = 0.0
+      if actual_phase < step:
+          u = full_swing_trapezoid_blend_u(actual_phase / step, params.blend_radius, segment_length, False)
+          y = params.amplitude * u
+      elif actual_phase < 2.0 * step:
+          u = full_swing_trapezoid_blend_u((actual_phase - step) / step, params.blend_radius, segment_length, True)
+          y = params.amplitude * (1.0 - u)
+      elif actual_phase < 3.0 * step:
+          u = full_swing_trapezoid_blend_u((actual_phase - 2.0 * step) / step, params.blend_radius, segment_length, False)
+          y = -params.amplitude * u
+      else:
+          u = full_swing_trapezoid_blend_u((actual_phase - 3.0 * step) / step, params.blend_radius, segment_length, True)
+          y = -params.amplitude * (1.0 - u)
+      end
+      return [0,-y,0,0,0,0]
+  end
+  def full_swing_offset(params, phase, forward_speed, period_length):
+      if params.type == 0:
+          return full_swing_crescent_offset(params, phase, forward_speed, period_length)
+      elif params.type == 1:
+          return full_swing_circle_offset(params, phase, period_length)
+      elif params.type == 2:
+          return full_swing_zigzag_offset(params, phase, forward_speed, period_length)
+      elif params.type == 3:
+          return full_swing_trapezoid_offset(params, phase, forward_speed, period_length)
+      end
+      return full_zero_offset()
+  end
+  def full_swing_apply_offset(offset):
+      global full_swing_last_offset
+      global full_swing_offset_type
+      path_offset_set(offset, full_swing_offset_type)
+      full_swing_last_offset = full_copy_offset(offset)
+  end
+  def full_swing_clamp(value, min_value, max_value):
+      if value < min_value:
+          return min_value
+      elif value > max_value:
+          return max_value
+      end
+      return value
+  end
+  def full_swing_limited_offset(target_offset, dt):
+      global full_swing_control_period
+      global full_swing_last_offset
+      global full_swing_last_velocity
+      global full_swing_max_offset_speed
+      global full_swing_max_offset_accel
+      if dt <= 0 or dt > full_swing_control_period:
+          dt = full_swing_control_period
+      end
+      delta = [0,0,0,0,0,0]
+      result = [0,0,0,0,0,0]
+      velocity = [0,0,0,0,0,0]
+      desired_velocity = [0,0,0,0,0,0]
+      velocity_delta = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          delta[i] = target_offset[i] - full_swing_last_offset[i]
+          i = i + 1
+      end
+      distance = full_swing_offset_distance(delta)
+      if distance <= 0.000000001:
+          full_swing_last_velocity = full_zero_offset()
+          return full_copy_offset(target_offset)
+      end
+      speed_scale = 1.0
+      desired_speed = distance / dt
+      if desired_speed > full_swing_max_offset_speed:
+          speed_scale = full_swing_max_offset_speed / desired_speed
+      end
+      i = 0
+      while i < 6:
+          desired_velocity[i] = delta[i] / dt * speed_scale
+          velocity_delta[i] = desired_velocity[i] - full_swing_last_velocity[i]
+          i = i + 1
+      end
+      velocity_delta_distance = full_swing_offset_distance(velocity_delta)
+      max_velocity_delta = full_swing_max_offset_accel * dt
+      accel_scale = 1.0
+      if velocity_delta_distance > max_velocity_delta and velocity_delta_distance > 0:
+          accel_scale = max_velocity_delta / velocity_delta_distance
+      end
+      step = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          velocity[i] = full_swing_last_velocity[i] + velocity_delta[i] * accel_scale
+          step[i] = velocity[i] * dt
+          i = i + 1
+      end
+      step_distance = full_swing_offset_distance(step)
+      if step_distance >= distance:
+          full_swing_last_velocity = full_copy_offset(desired_velocity)
+          return full_copy_offset(target_offset)
+      end
+      i = 0
+      while i < 6:
+          result[i] = full_swing_last_offset[i] + step[i]
+          i = i + 1
+      end
+      full_swing_last_velocity = full_copy_offset(velocity)
+      return result
+  end
+  def full_swing_apply_limited_offset(target_offset, dt):
+      limited_offset = full_swing_limited_offset(target_offset, dt)
+      full_swing_apply_offset(limited_offset)
+  end
+  def full_swing_apply_exact_offset(target_offset, dt):
+      global full_swing_last_velocity
+      if dt <= 0:
+          dt = full_swing_control_period
+      end
+      velocity = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          velocity[i] = (target_offset[i] - full_swing_last_offset[i]) / dt
+          i = i + 1
+      end
+      full_swing_apply_offset(target_offset)
+      full_swing_last_velocity = velocity
+  end
+  def full_swing_stopping_offset(dt):
+      global full_swing_control_period
+      global full_swing_last_offset
+      global full_swing_last_velocity
+      global full_swing_max_offset_speed
+      global full_swing_max_offset_accel
+      if dt <= 0 or dt > full_swing_control_period:
+          dt = full_swing_control_period
+      end
+      delta = [0,0,0,0,0,0]
+      result = [0,0,0,0,0,0]
+      desired_velocity = [0,0,0,0,0,0]
+      velocity_delta = [0,0,0,0,0,0]
+      velocity = [0,0,0,0,0,0]
+      step = [0,0,0,0,0,0]
+      exact_velocity = [0,0,0,0,0,0]
+      exact_velocity_delta = [0,0,0,0,0,0]
+      i = 0
+      while i < 6:
+          delta[i] = -full_swing_last_offset[i]
+          i = i + 1
+      end
+      distance = full_swing_offset_distance(delta)
+      max_velocity_delta = full_swing_max_offset_accel * dt
+      desired_speed = 0.0
+      if distance > 0.000000001:
+          desired_speed = distance / dt
+          if desired_speed > full_swing_max_offset_speed:
+              desired_speed = full_swing_max_offset_speed
+          end
+          braking_speed = full_sqrt(2.0 * full_swing_max_offset_accel * distance)
+          if desired_speed > braking_speed:
+              desired_speed = braking_speed
+          end
+          i = 0
+          while i < 6:
+              desired_velocity[i] = delta[i] / distance * desired_speed
+              i = i + 1
+          end
+      end
+      i = 0
+      while i < 6:
+          velocity_delta[i] = desired_velocity[i] - full_swing_last_velocity[i]
+          i = i + 1
+      end
+      velocity_delta_distance = full_swing_offset_distance(velocity_delta)
+      accel_scale = 1.0
+      if velocity_delta_distance > max_velocity_delta and velocity_delta_distance > 0:
+          accel_scale = max_velocity_delta / velocity_delta_distance
+      end
+      i = 0
+      while i < 6:
+          velocity[i] = full_swing_last_velocity[i] + velocity_delta[i] * accel_scale
+          step[i] = velocity[i] * dt
+          exact_velocity[i] = delta[i] / dt
+          exact_velocity_delta[i] = exact_velocity[i] - full_swing_last_velocity[i]
+          i = i + 1
+      end
+      step_distance = full_swing_offset_distance(step)
+      exact_velocity_distance = full_swing_offset_distance(exact_velocity)
+      exact_velocity_delta_distance = full_swing_offset_distance(exact_velocity_delta)
+      step_dot_delta = step[0] * delta[0] + step[1] * delta[1] + step[2] * delta[2]
+      if step_dot_delta > 0 and step_distance >= distance and exact_velocity_distance <= max_velocity_delta and exact_velocity_delta_distance <= max_velocity_delta:
+          full_swing_last_velocity = full_copy_offset(exact_velocity)
+          return full_zero_offset()
+      end
+      i = 0
+      while i < 6:
+          result[i] = full_swing_last_offset[i] + step[i]
+          i = i + 1
+      end
+      full_swing_last_velocity = full_copy_offset(velocity)
+      return result
+  end
+  def full_swing_clear_offset(max_speed):
+      global full_swing_control_period
+      global full_swing_last_offset
+      global full_swing_last_velocity
+      global full_swing_max_offset_speed
+      global full_swing_max_offset_accel
+      old_max_speed = full_swing_max_offset_speed
+      if max_speed > 0:
+          full_swing_max_offset_speed = max_speed
+      end
+      max_velocity_delta = full_swing_max_offset_accel * full_swing_control_period
+      while full_swing_offset_distance(full_swing_last_offset) > 0.000000001 or full_swing_offset_distance(full_swing_last_velocity) > max_velocity_delta:
+          stopping_offset = full_swing_stopping_offset(full_swing_control_period)
+          full_swing_apply_offset(stopping_offset)
+          sleep(full_swing_control_period)
+      end
+      full_swing_apply_offset(full_zero_offset())
+      sleep(full_swing_control_period)
+      full_swing_last_velocity = full_zero_offset()
+      full_swing_max_offset_speed = old_max_speed
+  end
+  def full_swing_path_offset():
+      import time
+      global full_swing_enabled
+      global full_swing_process_index
+      global full_swing_control_period
+      global full_swing_last_velocity
+      global full_swing_start_ramp_time
+      global full_swing_min_forward_speed
+      path_offset_enable()
+      path_offset_set_alpha_filter(full_swing_alpha_filter)
+      max_offset_process = -1
+      full_swing_apply_offset(full_zero_offset())
+      full_swing_last_velocity = full_zero_offset()
+      last_pose = full_swing_center_tcp_pose()
+      last_time = time.time()
+      active_distance = 0.0
+      motion_started = False
+      active_time = 0.0
+      while full_swing_enabled == True and full_swing_process_index >= 0:
+          process = full_swing_process_index
+          params = SwingParameters[process]
+          now = time.time()
+          dt = now - last_time
+          last_time = now
+          if dt <= 0 or dt > 0.1:
+              dt = full_swing_control_period
+          end
+          control_dt = full_swing_control_period
+          pose = full_swing_center_tcp_pose()
+          forward_speed = 0.0
+          measured_forward_speed = 0.0
+          if len(pose) >= 6 and len(last_pose) >= 6:
+              delta = full_swing_pose_delta3(pose, last_pose)
+              ds = full_swing_offset_distance(delta)
+              if ds > 0.0000001:
+                  measured_forward_speed = ds / dt
+              end
+          end
+          last_pose = full_copy_offset(pose)
+          forward_speed = full_swing_mag_forward_speed()
+          if forward_speed <= 0:
+              forward_speed = measured_forward_speed
+          end
+          if motion_started != True:
+              if forward_speed > full_swing_min_forward_speed:
+                  motion_started = True
+                  active_time = 0.0
+                  active_distance = 0.0
+              else:
+                  full_swing_apply_limited_offset(full_zero_offset(), control_dt)
+              end
+          end
+          if motion_started == True:
+              active_time = active_time + control_dt
+              active_distance = active_distance + forward_speed * control_dt
+              period_length = full_swing_period_length(params, forward_speed)
+              if period_length > 0:
+                  if process != max_offset_process:
+                      max_trans_offset = params.amplitude + 0.01
+                      if params.type == 0 or params.type == 2:
+                          max_trans_offset = max_trans_offset + period_length
+                      elif params.type == 1:
+                          max_trans_offset = max_trans_offset + period_length / 2.0 + params.width
+                      end
+                      if max_trans_offset < 0.05:
+                          max_trans_offset = 0.05
+                      end
+                      path_offset_set_max_offset(max_trans_offset, 1.0)
+                      max_offset_process = process
+                  end
+                  phase = full_swing_phase(active_distance, period_length)
+                  target_offset = full_swing_offset(params, phase, forward_speed, period_length)
+                  exact_stop = False
+                  if params.type == 0:
+                      left_ratio = full_swing_dwell_ratio(params.left_stay_time, forward_speed, period_length)
+                      right_ratio = full_swing_dwell_ratio(params.right_stay_time, forward_speed, period_length)
+                      exact_stop = full_swing_two_side_stop_phase(phase, left_ratio, right_ratio)
+                  elif params.type == 2:
+                      left_ratio = full_swing_dwell_ratio(params.left_stay_time, forward_speed, period_length)
+                      center_ratio = full_swing_dwell_ratio(params.center_stay_time, forward_speed, period_length)
+                      right_ratio = full_swing_dwell_ratio(params.right_stay_time, forward_speed, period_length)
+                      exact_stop = full_swing_zigzag_stop_phase(phase, left_ratio, center_ratio, right_ratio)
+                  end
+                  stop_x_offset = target_offset[0]
+                  ramp_scale = full_swing_ramp_scale(active_time, full_swing_start_ramp_time)
+                  if ramp_scale < 1.0:
+                      target_offset = full_scale_offset(target_offset, ramp_scale)
+                  end
+                  if exact_stop == True:
+                      target_offset[0] = stop_x_offset
+                      full_swing_apply_exact_offset(target_offset, control_dt)
+                  else:
+                      full_swing_apply_limited_offset(target_offset, control_dt)
+                  end
+              else:
+                  full_swing_apply_limited_offset(full_zero_offset(), control_dt)
+              end
+          end
+          sleep(full_swing_control_period)
+      end
+      full_swing_clear_offset(full_swing_stop_clear_speed)
+  end
+  def full_start_swing(process):
+      global full_swing_thread_id
+      global full_swing_process_index
+      global full_swing_enabled
+      if process < 0 or process >= len(SwingParameters):
+          return
+      end
+      if SwingParameters[process].type < 0:
+          return
+      end
+      if full_swing_thread_id != 0:
+          full_stop_swing()
+      end
+      full_swing_process_index = process
+      full_swing_enabled = True
+      full_swing_thread_id = start_thread(full_swing_path_offset, ())
+  end
+  def full_stop_swing():
+      global full_swing_thread_id
+      global full_swing_process_index
+      global full_swing_enabled
+      clear_required = full_swing_thread_id != 0 or full_swing_offset_distance(full_swing_last_offset) > 0.000001
+      full_swing_enabled = False
+      if full_swing_thread_id != 0:
+          stop_thread(full_swing_thread_id)
+          full_swing_thread_id = 0
+      end
+      full_swing_process_index = -1
+      if clear_required:
+          full_swing_clear_offset(full_swing_stop_clear_speed)
+      end
+  end
+  #--------------- END Swing PathOffset -----------------
+  #--------------- END FullWeldingFunction -----------------
+  #--------------- Full touch sense -----------------
+  global full_touch_process_index
+  full_touch_process_index = -1
+  global full_touch_point_1
+  full_touch_point_1 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_2
+  full_touch_point_2 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_3
+  full_touch_point_3 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_4
+  full_touch_point_4 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_5
+  full_touch_point_5 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_6
+  full_touch_point_6 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_7
+  full_touch_point_7 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_8
+  full_touch_point_8 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_9
+  full_touch_point_9 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_10
+  full_touch_point_10 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_11
+  full_touch_point_11 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_12
+  full_touch_point_12 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_13
+  full_touch_point_13 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_14
+  full_touch_point_14 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_15
+  full_touch_point_15 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_16
+  full_touch_point_16 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_17
+  full_touch_point_17 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_18
+  full_touch_point_18 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_19
+  full_touch_point_19 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_20
+  full_touch_point_20 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_21
+  full_touch_point_21 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_22
+  full_touch_point_22 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_23
+  full_touch_point_23 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_24
+  full_touch_point_24 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_25
+  full_touch_point_25 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_26
+  full_touch_point_26 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_27
+  full_touch_point_27 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_28
+  full_touch_point_28 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_29
+  full_touch_point_29 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_point_30
+  full_touch_point_30 = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_sense_offset_value_array
+  full_touch_sense_offset_value_array = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  global full_touch_reference_point_array
+  full_touch_reference_point_array = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+  #--------------- END Full touch sense -----------------
+  global _hide_rpc_port
+  global _hide_rpc_host
+  global _hide_rpc_path
+  global _hide_rpc_client
+  
+  _hide_rpc_port = 19781
+  _hide_rpc_host = "127.0.0.1"
+  _hide_rpc_path = "/RPC2"
+  
+  _hide_cia402_not_ready = 0x0000
+  _hide_cia402_switch_on_disabled = 0x0040
+  _hide_cia402_switch_on_disabled_quick_stop = 0x0060
+  _hide_cia402_ready_to_switch_on = 0x0021
+  _hide_cia402_switch_on = 0x0023
+  _hide_cia402_operation_enabled = 0x0027
+  _hide_cia402_quick_stop_active = 0x0007
+  _hide_cia402_fault_reaction_active = 0x000f
+  _hide_cia402_fault = 0x0008
+  
+  
+  ###
+  # 获取RPC URL
+  #
+  # @return RPC URL字符串
+  ###
+  def _hide_get_rpc_url():
+      global _hide_rpc_port
+      global _hide_rpc_host
+      global _hide_rpc_path
+      return "http://" + _hide_rpc_host + ":" + str(_hide_rpc_port) + _hide_rpc_path
+  
+  # 创建XML-RPC客户端实例，连接到隐藏的RPC URL
+  _hide_rpc_client = rpc_factory("xmlrpc", _hide_get_rpc_url())
+  
+  ###
+  # 调用RPC方法
+  #
+  # @param method_name RPC方法名
+  # @param args 参数列表
+  # @return RPC方法调用结果
+  ###
+  def _hide_call_rpc_method(method_name, *args):
+      method = getattr(_hide_rpc_client, method_name, None)
+      if method is None:
+          popup("RPC method " + method_name + " not found in RPC client", title = "Error", error = True, blocking = True)
+          return None
+      result = method(*args)
+      return result
+  
+  ###
+  # 通过状态字，检查轴是否使能
+  #
+  # @param status_word 轴状态字
+  # @return True如果轴使能，否则False
+  ###
+  def _hide_is_axis_enable(status_word):
+      status = status_word & 0x006f
+      return status == _hide_cia402_operation_enabled
+  
+  ###
+  # 通过状态字，检查轴是否处于未准备好使能状态
+  #
+  # @param status_word 轴状态字
+  # @return True如果轴处于未准备好使能状态，否则False
+  ###
+  def _hide_is_axis_disable(status_word):
+      status = status_word & 0x006f
+      return status == _hide_cia402_switch_on_disabled or status == _hide_cia402_switch_on_disabled_quick_stop
+  
+  ###
+  # 通过状态字，检查轴是否处于故障状态
+  #
+  # @param status_word 轴状态字
+  # @return True如果轴处于故障状态，否则False
+  ###
+  def _hide_is_axis_fault(status_word):
+      return (status_word & 0x0008) > 0
+  
+  ###
+  # 选择EtherCAT网络接口
+  #
+  # @param ifname 网络接口名称，例如"eth0"
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_select_network_interface(ifname):
+      result = _hide_call_rpc_method("selectNetworkInterface", ifname)
+      return result
+  
+  ###
+  # 添加轴配置
+  #
+  # @param name 轴名称，必须是已经在轴组中定义的轴，否则会导致RPC调用失败
+  # @param station_address EtherCAT站地址，范围 1-65535
+  # @param counts_per_rev 编码器每转的计数值，例如2048
+  # @param gear_ratio 齿轮比，例如10表示电机转10圈轴转1圈
+  # @param feed_constant 进给常数，单位mm/rev，例如5表示轴转1圈移动5mm
+  # @param zero_offset_count 零点偏移的计数值，例如-100表示编码器零点相对于物理零点逆时针偏移100计数
+  # @param axis_index 轴索引，默认为-1表示自动获取，如果提供则必须与轴组中定义的轴索引一致，否则会导致RPC调用失败
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_add_axis_configure(name, station_address, counts_per_rev, gear_ratio, feed_constant, zero_offset_count, axis_index = -1):
+      # 计算轴的最大最小位置，单位是转，范围是 int32_t 的范围，考虑到零点偏移和齿轮比的影响
+      max_pos = (2147483647.0 - zero_offset_count) * feed_constant / (counts_per_rev * float(gear_ratio))
+      min_pos = (-2147483648.0 - zero_offset_count) * feed_constant / (counts_per_rev * float(gear_ratio))
+      # 获取轴的软件限制位置
+      lim_pos = axis_group_get_axis_limits(name)
+  
+      # 如果软件限制位置超出计算的最大最小位置，弹窗警告用户可能会导致位置溢出
+      if lim_pos[2] < min_pos:
+          popup("ethercat_add_axis_configure() - lower position limit of " + name +
+              " may cause overflow (position limit: " + str(lim_pos[2]) +
+              ", overflow threshold: " + str(min_pos) + ")",
+              title = "Warning",
+              warning = True,
+              blocking = True)
+      if lim_pos[3] > max_pos:
+          popup("ethercat_add_axis_configure() - upper position limit of " + name +
+              " may cause overflow (position limit: " + str(lim_pos[3]) +
+              ", overflow threshold: " + str(max_pos) + ")",
+              title = "Warning",
+              warning = True,
+              blocking = True)
+  
+      if axis_index < 0:
+          axis_index = axis_group_get_axis_index(name)
+  
+      result = _hide_call_rpc_method("addAxisConfigure",
+          name,               # name
+          axis_index,         # axis_index
+          station_address,    # station_address
+          counts_per_rev,     # counts_per_rev
+          gear_ratio,         # gear_ratio
+          feed_constant,      # feed_constant
+          zero_offset_count   # zero_offset_count
+      )
+      return result
+  
+  ###
+  # 启动EtherCAT主站
+  #
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_start_master():
+      result = _hide_call_rpc_method("startEtherCATMaster")
+      return result
+  
+  ###
+  # 停止EtherCAT主站
+  #
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_stop_master():
+      result = _hide_call_rpc_method("stopEtherCATMaster")
+      return result
+  
+  ###
+  # 获取轴位置
+  #
+  # @param name 轴名称
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #     "timestamp": 时间戳，字典，{""sec": 秒, "nsec": 纳秒}
+  #     "actual_positions": 轴位置，单位取决于轴配置中的feed_constant和gear_ratio，例如如果feed_constant是5mm/rev，gear_ratio是10，那么位置单位就是mm
+  #     "target_positions": 轴目标位置，单位同actual_positions
+  #     "actual_encoder_counts": 轴编码器计数值
+  #     "target_encoder_counts": 轴目标编码器计数值
+  #   }
+  ###
+  def ethercat_get_axis_positions(name):
+      result = _hide_call_rpc_method("getAxisPositions", name)
+      return result
+  
+  ###
+  # 清除轴配置
+  #
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_clear_axis_configure():
+      result = _hide_call_rpc_method("clearAxisConfigure")
+      return result
+  
+  ###
+  # 写SDO
+  #
+  # @param name 轴名称
+  # @param index SDO索引，例如0x6060
+  # @param sub_index SDO子索引，例如0x00
+  # @param value_type SDO值类型，"U8", "U16", "U32", ""
+  # @param value SDO值
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_write_sdo(name, index, sub_index, value_type, value):
+      result = _hide_call_rpc_method("writeSDO", name, index, sub_index, value_type, value)
+      return result
+  
+  ###
+  # 读SDO
+  #
+  # @param name 轴名称
+  # @param index SDO索引，例如0x6060
+  # @param sub_index SDO子索引，例如0x00
+  # @param value_type SDO值类型，例如"int16", "uint32", "float"等
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #     "value": 读取到的SDO值，类型取决于value_type
+  #   }
+  ###
+  def ethercat_read_sdo(name, index, sub_index, value_type):
+      result = _hide_call_rpc_method("readSDO", name, index, sub_index, value_type)
+      return result
+  
+  ###
+  # 刷新日志到磁盘（建议在导出日志前调用）
+  #
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #   }
+  ###
+  def ethercat_flush_log():
+      result = _hide_call_rpc_method("flushLog")
+      return result
+  
+  ###
+  # 查看轴是否使能
+  #
+  # @param name 轴名称
+  # @return True如果轴使能，否则False
+  ###
+  def ethercat_is_axis_enable(name):
+      status_word = axis_group_get_axis_status_word(name)
+      return _hide_is_axis_enable(status_word)
+  
+  ###
+  # 查看轴是否处于故障状态
+  #
+  # @param name 轴名称
+  # @return True如果轴处于故障状态，否则False
+  ###
+  def ethercat_is_axis_fault(name):
+      status_word = axis_group_get_axis_status_word(name)
+      return _hide_is_axis_fault(status_word)
+  
+  ###
+  # 使能轴
+  #
+  # @param name 轴名称
+  # @param timeout 超时时间，单位秒，默认10秒，如果使能过程超过该时间仍未完成则认为使能失败
+  # @param delay_after_enable 使能后等待时间，单位秒，默认1秒，某些伺服在使能后状态更新可能有延迟，适当的等待可以避免过快检查状态导致误判
+  # @return True如果使能成功，否则False
+  ###
+  def ethercat_enable_axis(name, timeout = 10, delay_after_enable = 1):
+      start_time = controller_timestamp()
+  
+      while axis_group_await_position(10) is False:  # 等待轴位置更新，确保轴状态字是最新的
+          if controller_timestamp() - start_time > timeout:
+              return False
+          sleep(get_steptime())
+  
+      while True:
+          axis_group_set_axis_command_word(name, 15)  # 使能轴
+          status_word = axis_group_get_axis_status_word(name)
+          if _hide_is_axis_fault(status_word):
+              popup("ethercat_axis_enable() - Axis " + name + " is in fault state, cannot be enabled, status word: " + hex(status_word), title = "Halt", error = True, blocking = True)
+              return False
+          if _hide_is_axis_enable(status_word):
+              return True
+          if controller_timestamp() - start_time > timeout:
+              return False
+          sleep(get_steptime()) # 等待一个控制周期再检查状态
+      sleep(delay_after_enable) # 使能后等待一段时间让状态稳定，避免过快检查状态导致误判
+      status_word = axis_group_get_axis_status_word(name)
+      if not _hide_is_axis_enable(status_word):
+          popup("ethercat_axis_enable() - Failed to enable axis " + name + " after enabling command, status word: " + hex(status_word), title = "Halt", error = True, blocking = True)
+          return False
+      return True
+  
+  ###
+  # 关闭轴使能
+  #
+  # @param name 轴名称
+  # @param timeout 超时时间，单位秒，默认10秒，如果关闭轴使能过程超过该时间仍未完成则认为关闭失败
+  # @return True如果成功关闭轴使能，否则False
+  ###
+  def ethercat_disable_axis(name, timeout = 10):
+      start_time = controller_timestamp()
+      while True:
+          if ethercat_is_axis_disable(name):
+              return True
+          # 关闭轴使能
+          axis_group_set_axis_command_word(name, 0)
+          status_word = axis_group_get_axis_status_word(name)
+          if controller_timestamp() - start_time > timeout:
+              return False
+          sleep(get_steptime()) # 等待一个控制周期再检查状态
+  
+  ###
+  # 查看轴是否处于未准备好使能状态
+  #
+  # @param name 轴名称
+  # @return True如果轴处于未准备好使能状态，否则False
+  ###
+  def ethercat_is_axis_disable(name):
+      status_word = axis_group_get_axis_status_word(name)
+      return _hide_is_axis_disable(status_word)
+  
+  ###
+  # 复位轴故障
+  #
+  # @param name 轴名称
+  # @param timeout 超时时间，单位秒，默认10秒
+  # @return True如果成功复位轴故障，否则False
+  ###
+  def ethercat_reset_axis_fault(name, timeout = 10):
+      start_time = controller_timestamp()
+      while True:
+          axis_group_set_axis_command_word(name, 128)  # 复位轴故障
+          status_word = axis_group_get_axis_status_word(name)
+          if not _hide_is_axis_fault(status_word):
+              return True
+          if controller_timestamp() - start_time > timeout:
+              return False
+          sleep(get_steptime()) # 等待一个控制周期再检查状态
+  
+  ### 轴回零
+  #
+  # @param name 轴名称
+  # @param method 将使用的 EtherCAT CoE CiA402 回零模式。有效值范围为 -128 ～ 127（包含边界值）。
+  #               不同伺服厂商支持的回零模式有所差异。有关支持的模式，请参见伺服厂商手册（参考 EtherCAT CoE CiA402 对象字典：0x6098）。
+  #               常用支持模式包括：
+  #                   1：轴朝负方向（-）移动，直至触发负限位开关；随后朝正方向（+）移动，并以下一个索引脉冲作为回零位置。
+  #                   2：轴朝正方向（+）移动，直至触发正限位开关；随后朝负方向（-）移动，并以下一个索引脉冲作为回零位置。
+  #                   35：轴不移动，直接以当前位置作为零点（通常与模式 37 行为一致）。
+  #                   37：轴不移动，直接以当前位置作为零点（通常与模式 35 行为一致）。
+  # @param offset 根据给定的偏移量（单位：编码器脉冲数）移动已设定的零点位置。
+  # @param vel_sw 限位搜寻速度
+  # @param vel_zero 零位搜寻速度
+  # @param acc 回零加速度
+  # @param timeout 超时时间，单位秒，默认30秒，如果回零过程超过该时间仍未完成则认为回零失败
+  # @return True如果回零成功，否则False
+  def ethercat_home_axis(name, method, offset, vel_sw, vel_zero, acc, timeout = 30):
+      start_time = controller_timestamp()
+      if not ethercat_is_axis_enable(name):
+          popup("ethercat_home_axis() - Failed to enable axis " + name + " for homing, cannot start homing procedure", title = "Halt", error = True, blocking = True)
+          halt()
+          return False
+      # 设置回零参数
+      param_result = _hide_call_rpc_method("setHomingParameters", name, method, offset, float(vel_sw), float(vel_zero), float(acc))
+      if param_result["error_code"] != 0:
+          popup("ethercat_home_axis() - Failed to set homing parameters for axis " + name + ", error: " + param_result["error_message"], title = "Halt", error = True, blocking = True)
+          halt()
+          return False
+  
+      # 启动轴回零
+      axis_group_set_axis_command_word(name, 31)
+      # TODO：这里sleep的原因是为了防止过快导致状态更新还未到位就检查状态导致的误判，后续可以优化和daemon的交互机制来避免这种情况，目前先简单的sleep一下
+      sleep(0.1)
+      # 启动回零过程
+      while True:
+          # 启动轴回零
+          axis_group_set_axis_command_word(name, 31)
+          # 等待一个控制周期再检查状态
+          sleep(get_steptime())
+  
+          # 等待轴位置更新，确保轴状态字是最新的
+          if axis_group_await_position(10) is False:
+              if controller_timestamp() - start_time > timeout:
+                  popup("ethercat_home_axis() - Homing procedure timed out for axis " + name + " while waiting for position update", title = "Halt", error = True, blocking = True)
+                  halt()
+                  return False
+              sleep(get_steptime())
+              continue
+  
+          status_word = axis_group_get_axis_status_word(name)
+          status_word_bits = integer_to_bit_list(status_word)
+          # 检查轴是否处于故障状态，如果是则弹窗提示并停止程序
+          if _hide_is_axis_fault(status_word):
+              popup("ethercat_home_axis() - Axis " + name + " is in fault state during homing procedure, status word: " + hex(status_word), title = "Halt", error = True, blocking = True)
+              halt()
+              return False
+          # 回零完成
+          if status_word_bits[10] == True and status_word_bits[12] == True and status_word_bits[15] == True:
+              break
+          # 检查超时
+          if controller_timestamp() - start_time > timeout:
+              popup("ethercat_home_axis() - Homing procedure timed out for axis " + name, title = "Halt", error = True, blocking = True)
+              halt()
+              return False
+      ethercat_enable_axis(name) # 回零完成后再次使能轴，确保轴处于使能状态
+      return True
+  
+  ### 获取EtherCAT主站状态
+  #
+  # @return 主站状态字符串： NULL, INIT, PRE_OP, BOOT, SAFE_OP, OPERATIONAL, ERROR, UNKNOWN
+  def ethercat_get_master_state():
+      result = _hide_call_rpc_method("getMasterState")
+      return result
+  
+  ### 获取轴的CiA402错误码
+  #
+  # @param name 轴名称
+  # @return 字典
+  #   {
+  #     "error_code": 0表示成功，非0表示失败的错误码。
+  #     "error_message": 结果消息字符串
+  #     "value": 16位的CiA402错误码，单位是十六进制，例如0x1234
+  #   }
+  def ethercat_get_axis_error_code(name):
+      result = _hide_call_rpc_method("getAxisErrorCode", name)
+      return result
+  #--------------- Start WeldingTools -----------------
+  global referenceCurrent
+  referenceCurrent = 0
+  global tracking_thread_id
+  tracking_thread_id = 0
+  global firstArc
+  firstArc = 0
+  global recordCurrent
+  recordCurrent = float('-inf')
+  global recordVoltage
+  recordVoltage = float('-inf')
+  def weldingIndicator(b):
+      set_standard_digital_out(-1,b)
+  end
+  def repeatable(i):
+     global firstArc
+     if firstArc>>i & 1 == 1:
+         halt()
+  end
+  def setRepeatable(i):
+     global firstArc
+     firstArc |= (1<<i)
+  end
+  def touchSenseOffset(org,dir1,dir2,length):
+     pose = elicopy.deepcopy(org)
+     pose_diff = [0,0,0]
+     pose_diff[0] = dir2[0] - dir1[0]
+     pose_diff[1] = dir2[1] - dir1[1]
+     pose_diff[2] = dir2[2] - dir1[2]
+     pose_diff = normalize(pose_diff)
+     pose[0] = pose[0] + pose_diff[0] * length
+     pose[1] = pose[1] + pose_diff[1] * length
+     pose[2] = pose[2] + pose_diff[2] * length
+     return pose
+  end
+  global touchSenseOffsetValue
+  touchSenseOffsetValue = [0,0,0,0,0,0]
+  global touchReferencePoint
+  touchReferencePoint = [0,0,0,0,0,0]
+  def pose_trans_local(world_pnt,frame):
+    return pose_trans(pose_inv(frame),world_pnt)
+  end
+  def pose_trans_world(local_pnt,frame):
+    return pose_trans(frame,local_pnt)
+  end
+  def two_point_get_vec(vec1,vec2):
+    result=[0,0,0]
+    result[0]=vec2[0]-vec1[0]
+    result[1]=vec2[1]-vec1[1]
+    result[2]=vec2[2]-vec1[2]
+    return result
+  end
+  def vector_o_product(vec1,vec2):
+    return vec1[0]*vec2[0]+vec1[1]*vec2[1]+vec1[2]*vec2[2]
+  end
+  def vector_v_product(vec1,vec2):
+    res_vec=[0,0,0]
+    res_vec[0]=vec1[1]*vec2[2]-vec1[2]*vec2[1]
+    res_vec[1]=vec1[2]*vec2[0]-vec1[0]*vec2[2]
+    res_vec[2]=vec1[0]*vec2[1]-vec1[1]*vec2[0]
+    return res_vec
+  end
+  def get_vertical_vec_by_three_point(pnt1,pnt2,vec_pnt):
+    vec1=[0,0,0]
+    vec1[0]=pnt2[0]-pnt1[0]
+    vec1[1]=pnt2[1]-pnt1[1]
+    vec1[2]=pnt2[2]-pnt1[2]
+    vec1=normalize(vec1)
+    vec2=[0,0,0]
+    vec2[0]=vec_pnt[0]-((pnt1[0]+pnt2[0])/2.0)
+    vec2[1]=vec_pnt[1]-((pnt1[1]+pnt2[1])/2.0)
+    vec2[2]=vec_pnt[2]-((pnt1[2]+pnt2[2])/2.0)
+    vec2=normalize(vec2)
+    ver_vec=vector_v_product(vec1,vec2)
+    return ver_vec
+  end
+  def two_point_touch_offset(pnt1,pnt2,vec_pnt,touch1,touch2,frame):
+    final_change=[0,0,0,0,0,0]
+    pnt1_local=pose_trans_local(pnt1,frame)
+    pnt2_local=pose_trans_local(pnt2,frame)
+    vec_pnt_local=pose_trans_local(vec_pnt,frame)
+    touch1_local=pose_trans_local(touch1,frame)
+    touch2_local=pose_trans_local(touch2,frame)
+    ver_vec=get_vertical_vec_by_three_point(pnt1_local,pnt2_local,vec_pnt_local)
+    if abs(norm(ver_vec))<0.0001:
+      return final_change
+    end
+    if (abs(ver_vec[0])>abs(ver_vec[1]))&(abs(ver_vec[0])>abs(ver_vec[2])):
+      pnt1_local[0]=0
+      pnt2_local[0]=0
+      touch1_local[0]=0
+      touch2_local[0]=0
+    elif (abs(ver_vec[1])>abs(ver_vec[0]))&(abs(ver_vec[1])>abs(ver_vec[2])):
+      pnt1_local[1]=0
+      pnt2_local[1]=0
+      touch1_local[1]=0
+      touch2_local[1]=0
+    elif (abs(ver_vec[2])>abs(ver_vec[0]))&(abs(ver_vec[2])>abs(ver_vec[1])):
+      pnt1_local[2]=0
+      pnt2_local[2]=0
+      touch1_local[2]=0
+      touch2_local[2]=0
+    else:
+      return final_change
+    end
+    final_change[0]=touch1_local[0]-pnt1_local[0]
+    final_change[1]=touch1_local[1]-pnt1_local[1]
+    final_change[2]=touch1_local[2]-pnt1_local[2]
+    new_vec1=two_point_get_vec(pnt1_local,pnt2_local)
+    new_vec1=normalize(new_vec1)
+    if abs(norm(new_vec1))<0.0001:
+      return final_change
+    end
+    new_vec2=two_point_get_vec(touch1_local,touch2_local)
+    new_vec2=normalize(new_vec2)
+    if abs(norm(new_vec2))<0.0001:
+      return final_change
+    end
+    angle=vector_o_product(new_vec1,new_vec2)/(norm(new_vec1)*norm(new_vec2))
+    if angle>1.0:
+      angle=1.0
+    end
+    if angle<-1.0:
+      angle=-1.0
+    end
+    angle=acos(angle)
+    if abs(angle)<0.0001:
+      return final_change
+    end
+    judge_vec=vector_v_product(new_vec1,new_vec2)
+    if abs(norm(judge_vec))<0.0001:
+      return final_change
+    end
+    judge_vec=normalize(judge_vec)
+    if abs(judge_vec[0])>0.9999:
+      if judge_vec[0]>0:
+        final_change[3]=angle
+      else:
+        final_change[3]=-angle
+      end
+      return final_change
+    end
+    if abs(judge_vec[1])>0.9999:
+      if judge_vec[1]>0:
+        final_change[4]=angle
+      else:
+        final_change[4]=-angle
+      end
+      return final_change
+    end
+    if abs(judge_vec[2])>0.9999:
+      if judge_vec[2]>0:
+        final_change[5]=angle
+      else:
+        final_change[5]=-angle
+      end
+      return final_change
+    end
+    return final_change
+  end
+  def last_point_touch_offset(pnt1,pnt2,vec_pnt,touch1,touch2,pnt3,touch3,frame):
+    final_change=[0,0,0,0,0,0]
+    pnt3_local=pose_trans_local(pnt3,frame)
+    touch3_local=pose_trans_local(touch3,frame)
+    touch1_local=pose_trans_local(touch1,frame)
+    touch2_local=pose_trans_local(touch2,frame)
+    pnt1_local=pose_trans_local(pnt1,frame)
+    pnt2_local=pose_trans_local(pnt2,frame)
+    vec_pnt_local=pose_trans_local(vec_pnt,frame)
+    ver_vec=get_vertical_vec_by_three_point(pnt1_local,pnt2_local,vec_pnt_local)
+    if abs(norm(ver_vec))<0.0001:
+      return final_change
+    end
+    if (abs(ver_vec[0])>abs(ver_vec[1]))&(abs(ver_vec[0])>abs(ver_vec[2])):
+      pnt3_local[0]=0
+      touch3_local[0]=0
+      touch1_local[0]=0
+      touch2_local[0]=0
+    elif (abs(ver_vec[1])>abs(ver_vec[0]))&(abs(ver_vec[1])>abs(ver_vec[2])):
+      pnt3_local[1]=0
+      touch3_local[1]=0
+      touch1_local[1]=0
+      touch2_local[1]=0
+    elif (abs(ver_vec[2])>abs(ver_vec[0]))&(abs(ver_vec[2])>abs(ver_vec[1])):
+      pnt3_local[2]=0
+      touch3_local[2]=0
+      touch1_local[2]=0
+      touch2_local[2]=0
+    else:
+      return final_change
+    end
+    new_vec3=two_point_get_vec(pnt3_local,touch3_local)
+    if abs(norm(new_vec3))<0.0001:
+      return final_change
+    end
+    new_vec2=two_point_get_vec(touch1_local,touch2_local)
+    if abs(norm(new_vec2))<0.0001:
+      return final_change
+    end
+    new_vec2=normalize(new_vec2)
+    value=vector_o_product(new_vec2,new_vec3)
+    final_change[0]=new_vec2[0]*value
+    final_change[1]=new_vec2[1]*value
+    final_change[2]=new_vec2[2]*value
+    return final_change
+  end
+  def cal_new_orientation_point(pnt1,pnt2,pnt3,inner_pnt,vec_pnt):
+    new_vec_pnt=elicopy.deepcopy(vec_pnt)
+    first_vec=two_point_get_vec(pnt1,pnt2)
+    first_vec=normalize(first_vec)
+    if abs(norm(first_vec))<0.0001:
+        return new_vec_pnt
+    end
+    second_vec=two_point_get_vec(pnt1,pnt3)
+    second_vec=normalize(second_vec)
+    if abs(norm(second_vec))<0.0001:
+        return new_vec_pnt
+    end
+    vec_dir=vector_v_product(first_vec,second_vec)
+    vec_dir=normalize(vec_dir)
+    if abs(norm(vec_dir))<0.0001:
+     return new_vec_pnt
+    end
+    len=vector_o_product(vec_dir,two_point_get_vec(inner_pnt,vec_pnt))
+    new_vec_pnt[0]=inner_pnt[0]+vec_dir[0]*len
+    new_vec_pnt[1]=inner_pnt[1]+vec_dir[1]*len
+    new_vec_pnt[2]=inner_pnt[2]+vec_dir[2]*len
+    return new_vec_pnt
+  end
+  global trackingFrame
+  trackingFrame = [0,0,0,0,0,0]
+  class KalmanFilter:
+      def __init__(self, process_variance, measurement_variance, initial_estimate=0.0, initial_error=1.0):
+          self.Q = process_variance
+          self.R = measurement_variance
+          self.x = initial_estimate
+          self.P = initial_error
+      def update(self, measurement):
+          self.P = self.P + self.Q
+          K = self.P / (self.P + self.R)
+          self.x = self.x + K * (measurement - self.x)
+          self.P = (1 - K) * self.P
+          return self.x
+  class PIDController:
+      def __init__(self, kp, ki, kd, setpoint):
+          self.kp = kp
+          self.ki = ki
+          self.kd = kd
+          self.setpoint = setpoint
+          self.previous_error = 0
+          self.integral = 0
+      def update(self, measured_value, dt):
+          error = self.setpoint - measured_value
+          self.integral += error * dt
+          derivative = (error - self.previous_error) / dt
+          output = self.kp * error + self.ki * self.integral + self.kd * derivative
+          self.previous_error = error
+          return output
+  def collect_current(duration_sec=5, interval_sec=0.1):
+      data = []
+      total_time = 0
+      while total_time < duration_sec:
+          current = 0
+          data.append(current)
+          total_time = total_time + interval_sec
+          sleep(interval_sec)
+      return data
+  def calculate_median(values):
+      if not values:
+          return 0.0
+      sorted_values = sorted(values)
+      n = len(sorted_values)
+      mid = n // 2
+      return (sorted_values[mid] if n % 2 == 1
+              else (sorted_values[mid - 1] + sorted_values[mid]) / 2)
+  def calculate_std(values):
+      if len(values) < 2:
+          return 0.0
+      mean = sum(values) / len(values)
+      variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+      if variance < 0:
+          variance = variance * -1
+      return variance
+  def median_filter(signal, kernel_size=5):
+      filtered = []
+      half = kernel_size // 2
+      for i in range(len(signal)):
+          start = max(0, i - half)
+          end = min(len(signal), i + half + 1)
+          window = signal[start:end]
+          sorted_window = sorted(window)
+          n = len(sorted_window)
+          if n % 2 == 1:
+              median = sorted_window[n // 2]
+          else:
+              median = (sorted_window[(n // 2) - 1] + sorted_window[n // 2]) / 2
+          filtered.append(median)
+      return filtered
+  def trapezoidal_integrate(y, x):
+      area = 0.0
+      for i in range(1, len(y)):
+          delta_x = x[i] - x[i - 1]
+          avg_y = (y[i - 1] + y[i]) / 2
+          area += avg_y * delta_x
+      return area
+  def calculate_areas(I):
+      t = [0.0] * len(I)
+      t[0] = 0.01
+      for i in range(1, len(I)):
+          t[i] = t[i - 1] + 0.01
+      net_area = trapezoidal_integrate(I, t)
+      return net_area
+  def calculate_baseline(data, window_size=200, threshold=3):
+      filtered = []
+      data_len = len(data)
+      for i in range(data_len):
+          start = max(0, i - window_size)
+          window = data[start:i + 1]
+          window_median = calculate_median(window)
+          window_std = calculate_std(window)
+          if window_std == 0:
+              filtered.append(data[i])
+          else:
+              if abs(data[i] - window_median) < threshold * window_std:
+                  filtered.append(data[i])
+      if not filtered:
+          return 0.0
+      return calculate_median(filtered)
+  def getReferenceCurrent(startTime, rcTime,sampled):
+      global referenceCurrent
+      sampled[0] = True
+      sleep(startTime)
+      current_data = collect_current(rcTime,0.01)
+      current = calculate_baseline(current_data)
+      referenceCurrent = current
+      return current
+  def cal_forward_frame(pnt_start,pnt_end):
+      forward_frame=[0,0,0,0,0,0]
+      forward_vec=two_point_get_vec(pnt_start,pnt_end)
+      if abs(norm(forward_vec))<0.0001:
+          return forward_frame
+      end
+      forward_vec=normalize(forward_vec)
+      cur_tool_pose=get_actual_tcp_pose()
+      cos0 = cos(cur_tool_pose[3])
+      cos1 = cos(cur_tool_pose[4])
+      cos2 = cos(cur_tool_pose[5])
+      sin0 = sin(cur_tool_pose[3])
+      sin1 = sin(cur_tool_pose[4])
+      sin2 = sin(cur_tool_pose[5])
+      z_dir = [0.0, 0.0, 1.0]
+      z_dir[0] = cos2 * sin1 * cos0 + sin2 * sin0
+      z_dir[1] = sin2 * sin1 * cos0 - cos2 * sin0
+      z_dir[2] = cos1 * cos0
+      if abs(norm(z_dir))<0.0001:
+          return forward_frame
+      end
+      z_dir=normalize(z_dir)
+      y_dir=vector_v_product(z_dir,forward_vec)
+      if abs(norm(y_dir))<0.0001:
+          return forward_frame
+      end
+      origin_pnt=[cur_tool_pose[0],cur_tool_pose[1],cur_tool_pose[2]]
+      forward_frame=cal_rpy_frame(origin_pnt,forward_vec,y_dir)
+      return forward_frame
+  end
+  def cal_current_direction(track_frame):
+    accuracy = 0.001
+    cos0 = cos(track_frame[3])
+    cos1 = cos(track_frame[4])
+    cos2 = cos(track_frame[5])
+    sin0 = sin(track_frame[3])
+    sin1 = sin(track_frame[4])
+    sin2 = sin(track_frame[5])
+    frame_y_dir = [0.0, 1.0, 0.0]
+    frame_y_dir[0] = cos2 * sin1 * sin0 - sin2 * cos0
+    frame_y_dir[1] = sin2 * sin1 * sin0 + cos2 * cos0
+    frame_y_dir[2] = cos1 * sin0
+    if abs(norm(frame_y_dir))<accuracy:
+      return 0
+    end
+    cur_tool_pose=get_target_tcp_pose_along_path()
+    ori_to_tool=two_point_get_vec(track_frame,cur_tool_pose)
+    if abs(norm(ori_to_tool))<accuracy:
+      return 0
+    end
+  
+    result=vector_o_product(frame_y_dir,ori_to_tool)
+    if result > accuracy:
+      return 1
+    end
+    if result < (-1 * accuracy):
+      return -1
+    end
+    return 0
+  end
+  def calculate_y_axis_z_axis_offset_in_base_frame(y_offset,z_offset,local_offset_frame):
+    cos0 = cos(local_offset_frame[3])
+    cos1 = cos(local_offset_frame[4])
+    cos2 = cos(local_offset_frame[5])
+    sin0 = sin(local_offset_frame[3])
+    sin1 = sin(local_offset_frame[4])
+    sin2 = sin(local_offset_frame[5])
+    ## calculate local offset frame z axis direction
+    local_z_dir = [0.0, 0.0, 1.0]
+    local_z_dir[0] = cos2 * sin1 * cos0 + sin2 * sin0
+    local_z_dir[1] = sin2 * sin1 * cos0 - cos2 * sin0
+    local_z_dir[2] = cos1 * cos0
+    ## calculate y offset in base frame
+    base_z_offset = [0.0, 0.0, 1.0]
+    base_z_offset[0] = z_offset * local_z_dir[0]
+    base_z_offset[1] = z_offset * local_z_dir[1]
+    base_z_offset[2] = z_offset * local_z_dir[2]
+    ## calculate local offset frame y axis direction
+    local_y_dir = [0.0, 1.0, 0.0]
+    local_y_dir[0] = cos2 * sin1 * sin0 - sin2 * cos0
+    local_y_dir[1] = sin2 * sin1 * sin0 + cos2 * cos0
+    local_y_dir[2] = cos1 * sin0
+    ## calculate y offset in base frame
+    base_y_offset = [0.0, 1.0, 0.0]
+    base_y_offset[0] = y_offset * local_y_dir[0]
+    base_y_offset[1] = y_offset * local_y_dir[1]
+    base_y_offset[2] = y_offset * local_y_dir[2]
+    result_offset = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    result_offset[0] = base_z_offset[0] + base_y_offset[0]
+    result_offset[1] = base_z_offset[1] + base_y_offset[1]
+    result_offset[2] = base_z_offset[2] + base_y_offset[2]
+    return result_offset
+  end
+  def stepwiseZero(value):
+      step = 0.002
+      if value > 0:
+          value = max(value - step, 0.0)
+      else:
+          value = min(value + step, 0.0)
+      if -1e-10 < value < 1e-10:
+          return 0.0
+      return value
+  end
+  def pathOffsetClear():
+      offset = path_offset_get(1)
+      while offset != [0] * len(offset):
+          x = stepwiseZero(offset[0])
+          y = stepwiseZero(offset[1])
+          z = stepwiseZero(offset[2])
+          rx = stepwiseZero(offset[3])
+          ry = stepwiseZero(offset[4])
+          rz = stepwiseZero(offset[5])
+          path_offset_set([x,y,z,rx,ry,rz], 1)
+          sync()
+          offset = path_offset_get(1)
+      end
+  end
+  global arc_alarm_thread_id
+  arc_alarm_thread_id = 0
+  def arcTracking(maxOffset, type, rcTime=0.1, isConstant = False,current = 160.0, lrOffset = 0.5, upOffset = 0.5,startTime = 2.0,startCyc = 3,udMax = 5,lrMax = 5):
+      import time
+      global arc_alarm_thread_id
+      global referenceCurrent
+      global trackingFrame
+      referenceCurrent = current
+      kf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=referenceCurrent)
+      controller = PIDController(kp=0.5, ki=0.1, kd=0.01, setpoint=0)
+      lrkf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=0)
+      lrController = PIDController(kp=0.5, ki=0.01, kd=0.01, setpoint=0)
+      sampled = [False]
+      path_offset_enable()
+      path_offset_set_alpha_filter(0.1)
+      path_offset_set_max_offset(maxOffset, 1.0)
+      path_offset_set([0,0,0,0,0,0], 1)
+      zOffset = 0.0
+      yOffset = 0
+      lCurrent = []
+      rCurrent = []
+      udCurrent = []
+      cycleIndex = 0
+      prev_state = 0
+      lastDir = 0
+      lastTimestamp = int(time.time() * 1000)
+      while True:
+          if arc_alarm_thread_id == 0:
+              sampled[0] = False
+              cycleIndex = 0
+              lastDir = 0
+              reference_current = 0 if not isConstant else current
+              kf = None
+              pathOffsetClear()
+              sleep(0.1)
+          elif not sampled[0] and not isConstant:
+              start_thread(getReferenceCurrent,(startTime,rcTime,sampled))
+              cycleIndex = 0
+          else:
+              current = 0
+              ret = 0
+              if trackingFrame != [0] * len(trackingFrame):
+                  ret = cal_current_direction(trackingFrame)
+                  lastDir = lastDir | (ret if ret >= 0 else 2)
+              if type >> 1 & 1 == 1:
+                  if ret == 0 and lastDir == 3:
+                      cycleIndex += 1
+                      lastDir = 0
+                      if len(lCurrent) > 0 and len(rCurrent) > 0 :
+                          la = calculate_areas(lCurrent)
+                          ra = calculate_areas(rCurrent)
+                          y = (la - ra) * lrOffset / 5200
+                          y = lrkf.update(y)
+                          y = lrController.update(y, 1)
+                          if cycleIndex >= startCyc :
+                            y = min(lrMax,y)
+                            yOffset = yOffset + y
+                          lCurrent.clear()
+                          rCurrent.clear()
+                  elif ret > 0:
+                      lCurrent.append(current)
+                  elif ret < 0:
+                      rCurrent.append(current)
+              end
+              if sampled[0] == True and kf == None and referenceCurrent > 0 :
+                  kf = KalmanFilter(process_variance=1e-3, measurement_variance=0.01, initial_estimate=referenceCurrent)
+              if type & 1 == 1 and referenceCurrent > 0:
+                  filtered = 0
+                  timestamp_ms = int(time.time() * 1000)
+                  if trackingFrame != [0] * len(trackingFrame) and ret == 0:
+                          if lastDir == 3:
+                             filtered = calculate_baseline(udCurrent)
+                             udCurrent.clear()
+                          else:
+                             udCurrent.append(current)
+                  elif timestamp_ms - lastTimestamp >= 100:
+                      filtered = calculate_baseline(udCurrent)
+                      lastTimestamp = timestamp_ms
+                      udCurrent.clear()
+                  else:
+                      udCurrent.append(current)
+                  if filtered != 0:
+                      z = kf.update(filtered)
+                      z = (z - referenceCurrent) / 1.0
+                      z = controller.update(z, 1)
+                      z = z / 5000.0 * upOffset
+                      z = min(udMax,z)
+                      zOffset = z
+              end
+              if abs(zOffset) > 0.0001 or abs(yOffset) > 0.0001:
+                  if trackingFrame == [0] * len(trackingFrame):
+                      path_offset_set([0,0,zOffset * -1,0,0,0], 3)
+                  else:
+                      offset_frame = calculate_y_axis_z_axis_offset_in_base_frame(yOffset, zOffset,trackingFrame)
+                      path_offset_set(offset_frame, 1)
+                  end
+                  sleep(0.002)
+              end
+          end
+      end
+  end
+  #--------------- End WeldingTools -----------------
+  # Set Node Preamble Script.
+  # Loop Node Preamble Script.
+  # Waypoint Node Preamble Script.
+  # Initial Variables value.
+  # Timer Node Preamble Script.
+  # SubTask Node Preamble Script.
+  # Before Start Preamble Script.
+  # Thread Node Preamble Script.
+  # Event Node Preamble Script.
+  # Main Task Script.
+  while (True):
+    $ LINE: (2, "机器人主任务")
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 快速编程工具
+    $ LINE: (3, "快速编程工具")
+    full_repeatable(13)
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 点到点移动程序
+    $ LINE: (4, "点到点移动程序")
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 路点_1（协同）
+    $ LINE: (5, "路点_1（协同）")
+    movej(get_inverse_kin(full_apply_touch_offset([0.5118983230054975, -0.14749999996000482, 0.47480864477831675, 0.16044932735976677, 2.024689975644702E-10, -1.570796326762129]), qnear=[0.0,-1.570796327,-1.4103469990249229,-1.570796327,1.570796327,0.0]),1.396263401670578, 1.0471975511965976, 0, 0.0)
+    # End: ELITECO Plugin Task Node
+    in_welding_path = False
+    # End: ELITECO Plugin Task Node
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 直线焊接程序
+    $ LINE: (6, "直线焊接程序")
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 开始点
+    $ LINE: (7, "开始点")
+    movej(get_inverse_kin(full_apply_touch_offset([0.5118981521270449, -0.14749999996000482, 0.4010096402067772, 0.16045100454208244, 2.0246894260679767E-10, -1.5707963267621285]), qnear=[0.0,-1.5594372626533428,-1.6113136701665347,-1.3811870430227302,1.570796327,0.0]),1.396263401670578, 1.0471975511965976, 0, 0.0)
+    # End: ELITECO Plugin Task Node
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: MAG焊接开始 No.1
+    $ LINE: (8, "MAG焊接开始 No.1")
+    in_welding_path = True
+    full_current_mag_process = 0
+    # End: ELITECO Plugin Task Node
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: 直线路点
+    $ LINE: (9, "直线路点")
+    movep(full_apply_touch_offset([0.5118975332548967, -0.06838935499602106, 0.4010083483918747, 0.16044691402958464, -7.723177187121058E-7, -1.5707948170127743]),1.05, 0.006, 0.0)
+    # End: ELITECO Plugin Task Node
+    # Begin: ELITECO Plugin Task Node
+    #   Source: FullFunctionWelding, 1.3.0, ELITE ROBOTS
+    #   Type: MAG焊接结束
+    $ LINE: (10, "MAG焊接结束")
+    full_current_mag_process = -1
+    in_welding_path = False
+    # End: ELITECO Plugin Task Node
+    in_welding_path = False
+    # End: ELITECO Plugin Task Node
+    # End: ELITECO Plugin Task Node
+  end
+end

@@ -41,6 +41,7 @@ except ImportError:
     tk = None
 
 SETTINGS_PATH = Path(__file__).resolve().parent / "last_settings.json"
+HOST_HISTORY_MAX = 20
 
 
 def load_settings():
@@ -161,6 +162,8 @@ class EliteScriptTester(object):
         self._save_job = None
         self._loading = True
         self.var_host = tk.StringVar(value=str(self.cfg.get("host") or DEFAULT_HOST))
+        self.host_history = self._load_host_history(self.cfg)
+        self.host_box = None
         self.var_port = tk.StringVar(value=str(self.cfg.get("port") or DEFAULT_PORT))
         self.var_timeout = tk.StringVar(value=str(self.cfg.get("timeout") or DEFAULT_TIMEOUT))
         self.var_reply = tk.BooleanVar(value=bool(self.cfg.get("read_reply", False)))
@@ -199,6 +202,29 @@ class EliteScriptTester(object):
         self._start_listen()
         self._poll_pose()
 
+    def _load_host_history(self, cfg):
+        raw = cfg.get("host_history") or []
+        current = str(cfg.get("host") or DEFAULT_HOST).strip()
+        history = []
+        seen = set()
+        for item in [current] + list(raw):
+            host = str(item).strip()
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            history.append(host)
+        return history[:HOST_HISTORY_MAX]
+
+    def _remember_host(self, host=None):
+        host = (self.var_host.get() if host is None else host).strip()
+        if not host:
+            return
+        items = [item for item in self.host_history if item != host]
+        self.host_history = ([host] + items)[:HOST_HISTORY_MAX]
+        if self.host_box is not None:
+            self.host_box["values"] = self.host_history
+        self._schedule_save()
+
     def _fit_geometry(self, saved):
         default = "780x500"
         if not saved:
@@ -221,8 +247,14 @@ class EliteScriptTester(object):
         bar = ttk.Frame(self.root, padding=(6, 4, 6, 2))
         bar.pack(fill="x")
         ttk.Label(bar, text="IP").pack(side="left")
-        ttk.Entry(bar, textvariable=self.var_host, width=14).pack(side="left", padx=(3, 6))
-        ttk.Label(bar, text="30001").pack(side="left")
+        self.host_box = ttk.Combobox(
+            bar, textvariable=self.var_host, width=16, values=self.host_history,
+        )
+        self.host_box.pack(side="left", padx=(3, 6))
+        self.host_box.bind("<FocusOut>", lambda *_: self._remember_host())
+        self.host_box.bind("<Return>", lambda *_: self._remember_host())
+        self.host_box.bind("<<ComboboxSelected>>", lambda *_: self._remember_host())
+        ttk.Label(bar, text="PORT").pack(side="left")
         ttk.Entry(bar, textvariable=self.var_port, width=5).pack(side="left", padx=(3, 6))
         ttk.Label(bar, text="超时").pack(side="left")
         ttk.Entry(bar, textvariable=self.var_timeout, width=4).pack(side="left", padx=(3, 6))
@@ -476,6 +508,7 @@ class EliteScriptTester(object):
             timeout = DEFAULT_TIMEOUT
         return {
             "host": self.var_host.get().strip(),
+            "host_history": list(self.host_history),
             "port": port,
             "timeout": timeout,
             "read_reply": bool(self.var_reply.get()),
@@ -504,6 +537,11 @@ class EliteScriptTester(object):
     def _on_close(self):
         if self._save_job is not None:
             self.root.after_cancel(self._save_job)
+            self._save_job = None
+        self._remember_host()
+        if self._save_job is not None:
+            self.root.after_cancel(self._save_job)
+            self._save_job = None
         save_settings(self._collect_settings())
         if self._recording:
             self._stop_record(open_html=False)
@@ -720,8 +758,10 @@ class EliteScriptTester(object):
         self._schedule_save()
 
     def _params(self):
+        host = self.var_host.get().strip()
+        self.root.after(0, lambda h=host: self._remember_host(h))
         return (
-            self.var_host.get().strip(),
+            host,
             int(self.var_port.get()),
             float(self.var_timeout.get()),
         )
